@@ -1,0 +1,4 @@
+name: "Minimal test"
+steps:
+  - type: wait
+    duration_ms: 100

@@ -1,0 +1,39 @@
+name: "Full feature test"
+description: "Tests all 12 action types in the sandbox scenario engine"
+steps:
+  - type: click
+    x: 100
+    y: 200
+    button: left
+  - type: double_click
+    x: 150
+    y: 250
+  - type: type_text
+    text: "hello world"
+  - type: press_key
+    key: return
+    modifiers:
+      - cmd
+  - type: scroll
+    x: 100
+    y: 200
+    direction: down
+    amount: 3
+  - type: drag
+    from_x: 100
+    from_y: 100
+    to_x: 200
+    to_y: 200
+  - type: wait
+    duration_ms: 500
+  - type: screenshot
+    label: "before_action"
+  - type: spawn_app
+    path: "/Applications/Calculator.app"
+  - type: spawn_cli
+    command: "echo"
+    args:
+      - "hello"
+  - type: assert_screenshot_diff
+    label: "before_action"
+    max_diff_percentage: 0.05
