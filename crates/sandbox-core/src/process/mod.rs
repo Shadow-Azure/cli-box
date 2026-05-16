@@ -41,39 +41,39 @@ static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 pub struct ProcessManager;
 
 impl ProcessManager {
-    /// Launch a macOS .app by path using NSWorkspace
+    /// Launch a macOS .app by path using the `open` command
+    /// This avoids ObjC NSExceptions that crash the Rust process
     #[cfg(target_os = "macos")]
     pub fn spawn_app(app_path: &str) -> Result<ProcessInfo> {
-        use objc::rc::autoreleasepool;
-        use objc::{class, msg_send, sel, sel_impl};
+        let path = std::path::Path::new(app_path);
+        if !path.exists() {
+            return Err(AppError::Process(format!(
+                "App path does not exist: {app_path}"
+            )));
+        }
 
-        autoreleasepool(|| unsafe {
-            let path: &objc::runtime::Object =
-                msg_send![class!(NSString), stringWithUTF8String: app_path.as_ptr() as *const i8];
-            let url: &objc::runtime::Object = msg_send![class!(NSURL), fileURLWithPath: path];
-            let workspace: &objc::runtime::Object = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let config: &objc::runtime::Object =
-                msg_send![class!(NSWorkspaceOpenConfiguration), configuration];
-            let _: () = msg_send![config, setCreatesNewApplicationInstance: true as i8];
-            let success: bool = msg_send![workspace, openApplicationAtURL: url configuration: config error: std::ptr::null_mut::<*mut objc::runtime::Object>()];
+        let output = std::process::Command::new("open")
+            .arg(app_path)
+            .output()
+            .map_err(|e| AppError::Process(format!("Failed to run `open` command: {e}")))?;
 
-            if !success {
-                return Err(AppError::Process(format!(
-                    "Failed to launch app: {app_path}"
-                )));
-            }
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::Process(format!(
+                "Failed to launch app: {app_path} ({stderr})"
+            )));
+        }
 
-            let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(ProcessInfo {
-                pid: id,
-                name: std::path::Path::new(app_path)
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-                path: Some(app_path.to_string()),
-                is_running: true,
-            })
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(ProcessInfo {
+            pid: id,
+            name: std::path::Path::new(app_path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            path: Some(app_path.to_string()),
+            is_running: true,
         })
     }
 

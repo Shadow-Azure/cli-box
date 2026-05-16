@@ -116,6 +116,13 @@ struct RegionQuery {
     height: u32,
 }
 
+/// Screenshot query params
+#[derive(Deserialize)]
+struct ScreenshotQuery {
+    #[serde(default)]
+    window_id: Option<u32>,
+}
+
 /// Build the HTTP API router
 pub fn build_router(state: Arc<Mutex<AppState>>) -> Router {
     Router::new()
@@ -235,8 +242,10 @@ async fn drag_handler(Json(req): Json<DragRequest>) -> Result<Json<serde_json::V
     Ok(Json(serde_json::json!({"dragged": true})))
 }
 
-async fn screenshot_handler() -> Result<impl IntoResponse, AppError> {
-    let png_data = ScreenCapture::capture_sandbox()?;
+async fn screenshot_handler(
+    Query(q): Query<ScreenshotQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let png_data = ScreenCapture::capture_sandbox_by_id(q.window_id)?;
     Ok((StatusCode::OK, [("content-type", "image/png")], png_data))
 }
 
@@ -248,8 +257,10 @@ async fn screenshot_region_handler(
 }
 
 async fn ui_inspect_handler(Path(window_id): Path<u32>) -> Result<Json<UiElement>, AppError> {
-    let element = UiInspector::inspect_window(window_id)?;
-    Ok(Json(element))
+    let result = tokio::task::spawn_blocking(move || UiInspector::inspect_window(window_id))
+        .await
+        .map_err(|e| AppError::Accessibility(format!("UI inspect task failed: {e}")))?;
+    Ok(Json(result?))
 }
 
 #[derive(Deserialize)]
@@ -262,9 +273,15 @@ struct UiFindRequest {
 }
 
 async fn ui_find_handler(Json(req): Json<UiFindRequest>) -> Result<Json<Vec<UiElement>>, AppError> {
-    let elements =
-        UiInspector::find_elements(req.window_id, req.role.as_deref(), req.title.as_deref())?;
-    Ok(Json(elements))
+    let window_id = req.window_id;
+    let role = req.role;
+    let title = req.title;
+    let result = tokio::task::spawn_blocking(move || {
+        UiInspector::find_elements(window_id, role.as_deref(), title.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Accessibility(format!("UI find task failed: {e}")))?;
+    Ok(Json(result?))
 }
 
 #[derive(Deserialize)]
@@ -399,6 +416,7 @@ async fn diff_handler(Json(req): Json<DiffRequest>) -> Result<Json<DiffResult>, 
 enum AppError {
     Core(sandbox_core::AppError),
     BadRequest(String),
+    Accessibility(String),
 }
 
 impl From<sandbox_core::AppError> for AppError {
@@ -412,6 +430,7 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Accessibility(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         (status, Json(serde_json::json!({"error": message}))).into_response()
     }

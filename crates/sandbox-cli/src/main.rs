@@ -40,6 +40,9 @@ enum Commands {
         /// Output file path
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Window ID to capture (uses sandbox window if not specified)
+        #[arg(long)]
+        window_id: Option<u32>,
     },
 
     /// List windows in the sandbox
@@ -133,11 +136,11 @@ async fn main() -> anyhow::Result<()> {
 
             axum::serve(listener, app).await?;
         }
-        Commands::Screenshot { output } => {
+        Commands::Screenshot { output, window_id } => {
             let path = output.unwrap_or_else(|| PathBuf::from("sandbox_screenshot.png"));
-            tracing::info!("Taking screenshot -> {path:?}");
+            tracing::info!("Taking screenshot -> {path:?} (window_id={window_id:?})");
 
-            let png_data = ScreenCapture::capture_sandbox()?;
+            let png_data = ScreenCapture::capture_sandbox_by_id(window_id)?;
             std::fs::write(&path, &png_data)?;
             println!("Screenshot saved to {path:?} ({} bytes)", png_data.len());
         }
