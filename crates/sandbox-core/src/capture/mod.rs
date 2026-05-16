@@ -76,25 +76,47 @@ mod macos_impl {
 
         /// Capture the sandbox window by searching for it by title
         pub fn capture_sandbox() -> Result<Vec<u8>> {
+            Self::capture_sandbox_by_id(None)
+        }
+
+        /// Capture the sandbox window, optionally by a specific window ID.
+        /// If window_id is None, searches for a window titled "System Test Sandbox".
+        pub fn capture_sandbox_by_id(window_id: Option<u32>) -> Result<Vec<u8>> {
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
 
             let window_list = content.windows();
-            let window = window_list
-                .iter()
-                .find(|w| {
-                    w.title()
-                        .map(|t| t.contains("System Test Sandbox"))
-                        .unwrap_or(false)
-                })
-                .ok_or_else(|| AppError::WindowNotFound("Sandbox window not found".into()))?;
+
+            let window = if let Some(id) = window_id {
+                // Use the provided window ID directly
+                window_list
+                    .iter()
+                    .find(|w| w.window_id() == id)
+                    .ok_or_else(|| AppError::WindowNotFound(format!("Window ID {id} not found")))?
+            } else {
+                // Fallback: search by title
+                window_list
+                    .iter()
+                    .find(|w| {
+                        w.title()
+                            .map(|t| t.contains("System Test Sandbox"))
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| {
+                        AppError::WindowNotFound(
+                            "Sandbox window not found. In CLI mode, use capture_window(window_id) \
+                             or start the Tauri app first."
+                                .into(),
+                        )
+                    })?
+            };
 
             let filter = SCContentFilter::create().with_window(window).build();
 
             let config = SCStreamConfiguration::new()
-                .with_width(1280)
-                .with_height(800);
+                .with_width(window.frame().width as u32)
+                .with_height(window.frame().height as u32);
 
             let image = SCScreenshotManager::capture_image(&filter, &config)
                 .map_err(|e| AppError::Screenshot(format!("Failed to capture sandbox: {e:?}")))?;
@@ -171,6 +193,12 @@ mod non_macos_impl {
         }
 
         pub fn capture_sandbox() -> Result<Vec<u8>> {
+            Err(AppError::Screenshot(
+                "ScreenCaptureKit only available on macOS".into(),
+            ))
+        }
+
+        pub fn capture_sandbox_by_id(_window_id: Option<u32>) -> Result<Vec<u8>> {
             Err(AppError::Screenshot(
                 "ScreenCaptureKit only available on macOS".into(),
             ))

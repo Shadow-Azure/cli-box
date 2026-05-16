@@ -151,18 +151,29 @@ mod macos_impl {
         }
     }
 
+    const MAX_UI_DEPTH: usize = 30;
+
     unsafe fn ax_to_ui_element(element: AXUIElementRef) -> UiElement {
+        ax_to_ui_element_inner(element, 0)
+    }
+
+    unsafe fn ax_to_ui_element_inner(element: AXUIElementRef, depth: usize) -> UiElement {
         let role = ax_get_string(element, "AXRole").unwrap_or_else(|| "unknown".to_string());
         let title = ax_get_string(element, "AXTitle");
         let value = ax_get_string(element, "AXValue");
         let description = ax_get_string(element, "AXDescription");
 
-        let children_elements = ax_get_children(element);
-        let children: Vec<UiElement> = children_elements
-            .iter()
-            .map(|&child| ax_to_ui_element(child))
-            .collect();
-        ax_release_all(&children_elements);
+        let children = if depth >= MAX_UI_DEPTH {
+            vec![]
+        } else {
+            let children_elements = ax_get_children(element);
+            let result: Vec<UiElement> = children_elements
+                .iter()
+                .map(|&child| ax_to_ui_element_inner(child, depth + 1))
+                .collect();
+            ax_release_all(&children_elements);
+            result
+        };
 
         UiElement {
             role,
