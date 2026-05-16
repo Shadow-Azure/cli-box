@@ -608,13 +608,16 @@ jobs:
         run: cargo build -p sandbox-cli --release
 
       - name: 构建前端 + Tauri 桌面应用
-        working-directory: sandbox-web
-        run: pnpm tauri build
+        run: |
+          if ! cargo tauri --version &>/dev/null; then
+            cargo install tauri-cli --version "^2" --locked
+          fi
+          cargo tauri build
 
       - name: 整理构建产物
         run: |
           mkdir -p release
-          cp target/release/sandbox-cli release/
+          cp target/release/sandbox release/
           find target/release/bundle/macos -name "*.app" -maxdepth 1 -exec cp -R {} release/ \; 2>/dev/null || true
           find target/release/bundle/dmg -name "*.dmg" -maxdepth 1 -exec cp {} release/ \; 2>/dev/null || true
           echo "## 构建产物" >> "$GITHUB_STEP_SUMMARY"

@@ -72,18 +72,23 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - name: 安装前端依赖
+        working-directory: sandbox-web
         run: pnpm install --frozen-lockfile
 
       - name: 构建 CLI 二进制 (release)
         run: cargo build -p sandbox-cli --release
 
       - name: 构建前端 + Tauri 桌面应用
-        run: pnpm tauri build
+        run: |
+          if ! cargo tauri --version &>/dev/null; then
+            cargo install tauri-cli --version "^2" --locked
+          fi
+          cargo tauri build
 
       - name: 整理发布产物
         run: |
           mkdir -p release
-          cp target/release/sandbox-cli release/
+          cp target/release/sandbox release/
           find target/release/bundle/dmg -name "*.dmg" -maxdepth 1 -exec cp {} release/ \; 2>/dev/null || true
           cd release
           find ../target/release/bundle/macos -name "*.app" -maxdepth 1 -exec zip -r "System Test Sandbox.app.zip" {} \; 2>/dev/null || true
