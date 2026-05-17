@@ -120,6 +120,7 @@ jobs:
 
       - name: 运行测试覆盖率
         run: |
+          mkdir -p coverage
           cargo llvm-cov -p sandbox-core --cobertura --output-path coverage/cobertura.xml
 
       - name: 生成覆盖率摘要
