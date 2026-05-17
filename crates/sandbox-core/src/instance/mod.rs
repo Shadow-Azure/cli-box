@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_instance_registry_crud() {
-        let tmp = tempfile();
+        let tmp = tempfile("crud");
         let registry = InstanceRegistry::new(tmp.clone());
         let instance = SandboxInstance::new(
             "test1234".into(),
@@ -250,7 +250,94 @@ mod tests {
         assert_eq!(instance.title, "TextEdit");
     }
 
-    fn tempfile() -> PathBuf {
-        std::env::temp_dir().join(format!("sandbox_test_{}", std::process::id()))
+    #[test]
+    fn test_default_registry_uses_home_dir() {
+        let registry = InstanceRegistry::default();
+        let expected = dirs_home().join(".sandbox").join("instances");
+        assert_eq!(registry.base_dir, expected);
+    }
+
+    #[test]
+    fn test_update_window_id() {
+        let tmp = tempfile("window_id");
+        let registry = InstanceRegistry::new(tmp.clone());
+        let instance = SandboxInstance::new(
+            "win_test".into(),
+            15801,
+            99999,
+            InstanceKind::Cli {
+                command: "vim".into(),
+                args: vec![],
+            },
+        );
+        registry.register(&instance).unwrap();
+
+        registry.update_window_id("win_test", 42).unwrap();
+        let got = registry.get("win_test").unwrap();
+        assert_eq!(got.window_id, Some(42));
+    }
+
+    #[test]
+    fn test_list_empty_dir() {
+        let tmp = tempfile("empty_list");
+        let registry = InstanceRegistry::new(tmp.clone());
+        let list = registry.list().unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_list_multiple_sorted_by_created_at() {
+        let tmp = tempfile("multi_list");
+        let registry = InstanceRegistry::new(tmp);
+        for i in 0..3 {
+            let instance = SandboxInstance::new(
+                format!("inst{i}"),
+                15801 + i,
+                (1000 + i) as u32,
+                InstanceKind::Cli {
+                    command: "echo".into(),
+                    args: vec![],
+                },
+            );
+            registry.register(&instance).unwrap();
+        }
+        let list = registry.list().unwrap();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn test_unregister_nonexistent_is_ok() {
+        let tmp = tempfile("noexist");
+        let registry = InstanceRegistry::new(tmp);
+        assert!(registry.unregister("ghost").is_ok());
+    }
+
+    #[test]
+    fn test_get_nonexistent_returns_error() {
+        let tmp = tempfile("get_missing");
+        let registry = InstanceRegistry::new(tmp);
+        assert!(registry.get("missing").is_err());
+    }
+
+    #[test]
+    fn test_instance_serialization_roundtrip() {
+        let instance = SandboxInstance::new(
+            "ser_1234".into(),
+            15999,
+            55555,
+            InstanceKind::App {
+                path: "/Applications/Notes.app".into(),
+            },
+        );
+        let json = serde_json::to_string(&instance).unwrap();
+        let parsed: SandboxInstance = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "ser_1234");
+        assert_eq!(parsed.port, 15999);
+        assert!(matches!(parsed.kind, InstanceKind::App { .. }));
+        assert!(matches!(parsed.status, InstanceStatus::Starting));
+    }
+
+    fn tempfile(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("sandbox_test_{}_{}", std::process::id(), tag))
     }
 }

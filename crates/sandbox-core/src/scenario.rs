@@ -317,3 +317,312 @@ impl ScenarioRunner {
         report
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_step_to_action_click() {
+        let step = ScenarioStep::Click {
+            x: 10.0,
+            y: 20.0,
+            button: "left".into(),
+        };
+        let action = step.to_action();
+        match action {
+            Action::Click { x, y, button, .. } => {
+                assert_eq!(x, 10.0);
+                assert_eq!(y, 20.0);
+                assert_eq!(button, "left");
+            }
+            _ => panic!("expected Click action"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_double_click() {
+        let step = ScenarioStep::DoubleClick { x: 5.0, y: 5.0 };
+        let action = step.to_action();
+        assert!(matches!(action, Action::DoubleClick { x: 5.0, y: 5.0, .. }));
+    }
+
+    #[test]
+    fn test_step_to_action_type_text() {
+        let step = ScenarioStep::TypeText {
+            text: "hello".into(),
+        };
+        let action = step.to_action();
+        match action {
+            Action::TypeText { text, .. } => assert_eq!(text, "hello"),
+            _ => panic!("expected TypeText"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_press_key() {
+        let step = ScenarioStep::PressKey {
+            key: "return".into(),
+            modifiers: vec!["cmd".into()],
+        };
+        let action = step.to_action();
+        match action {
+            Action::PressKey { key, modifiers, .. } => {
+                assert_eq!(key, "return");
+                assert_eq!(modifiers, vec!["cmd"]);
+            }
+            _ => panic!("expected PressKey"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_scroll() {
+        let step = ScenarioStep::Scroll {
+            x: 1.0,
+            y: 2.0,
+            direction: "up".into(),
+            amount: 5,
+        };
+        let action = step.to_action();
+        match action {
+            Action::Scroll {
+                x,
+                y,
+                direction,
+                amount,
+                ..
+            } => {
+                assert_eq!(x, 1.0);
+                assert_eq!(y, 2.0);
+                assert_eq!(direction, "up");
+                assert_eq!(amount, 5);
+            }
+            _ => panic!("expected Scroll"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_drag() {
+        let step = ScenarioStep::Drag {
+            from_x: 0.0,
+            from_y: 0.0,
+            to_x: 100.0,
+            to_y: 100.0,
+        };
+        let action = step.to_action();
+        match action {
+            Action::Drag { from_x, to_x, .. } => {
+                assert_eq!(from_x, 0.0);
+                assert_eq!(to_x, 100.0);
+            }
+            _ => panic!("expected Drag"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_wait() {
+        let step = ScenarioStep::Wait { duration_ms: 250 };
+        let action = step.to_action();
+        match action {
+            Action::Wait { duration_ms, .. } => assert_eq!(duration_ms, 250),
+            _ => panic!("expected Wait"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_screenshot() {
+        let step = ScenarioStep::Screenshot {
+            label: Some("test".into()),
+        };
+        let action = step.to_action();
+        match action {
+            Action::Screenshot { label, .. } => assert_eq!(label, Some("test".into())),
+            _ => panic!("expected Screenshot"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_spawn_app() {
+        let step = ScenarioStep::SpawnApp {
+            path: "/Applications/X.app".into(),
+        };
+        let action = step.to_action();
+        match action {
+            Action::SpawnApp { path, .. } => assert_eq!(path, "/Applications/X.app"),
+            _ => panic!("expected SpawnApp"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_spawn_cli() {
+        let step = ScenarioStep::SpawnCli {
+            command: "ls".into(),
+            args: vec!["-la".into()],
+        };
+        let action = step.to_action();
+        match action {
+            Action::SpawnCli { command, args, .. } => {
+                assert_eq!(command, "ls");
+                assert_eq!(args, vec!["-la"]);
+            }
+            _ => panic!("expected SpawnCli"),
+        }
+    }
+
+    #[test]
+    fn test_step_to_action_assert_screenshot() {
+        let step = ScenarioStep::AssertScreenshotDiff {
+            label: Some("ref".into()),
+            max_diff_percentage: 0.1,
+        };
+        let action = step.to_action();
+        match action {
+            Action::AssertScreenshot {
+                label,
+                max_diff_percentage,
+                ..
+            } => {
+                assert_eq!(label, Some("ref".into()));
+                assert!((max_diff_percentage - 0.1).abs() < 0.001);
+            }
+            _ => panic!("expected AssertScreenshot"),
+        }
+    }
+
+    #[test]
+    fn test_step_describe_click() {
+        let step = ScenarioStep::Click {
+            x: 10.0,
+            y: 20.0,
+            button: "left".into(),
+        };
+        assert!(step.describe().contains("Click"));
+        assert!(step.describe().contains("10"));
+    }
+
+    #[test]
+    fn test_step_describe_double_click() {
+        let step = ScenarioStep::DoubleClick { x: 5.0, y: 5.0 };
+        assert!(step.describe().contains("Double-click"));
+    }
+
+    #[test]
+    fn test_step_describe_type_text() {
+        let step = ScenarioStep::TypeText { text: "hi".into() };
+        assert!(step.describe().contains("Type: hi"));
+    }
+
+    #[test]
+    fn test_step_describe_press_key() {
+        let step = ScenarioStep::PressKey {
+            key: "tab".into(),
+            modifiers: vec!["cmd".into()],
+        };
+        let desc = step.describe();
+        assert!(desc.contains("tab"));
+        assert!(desc.contains("cmd"));
+    }
+
+    #[test]
+    fn test_step_describe_scroll() {
+        let step = ScenarioStep::Scroll {
+            x: 1.0,
+            y: 2.0,
+            direction: "down".into(),
+            amount: 3,
+        };
+        assert!(step.describe().contains("Scroll"));
+        assert!(step.describe().contains("down"));
+    }
+
+    #[test]
+    fn test_step_describe_drag() {
+        let step = ScenarioStep::Drag {
+            from_x: 0.0,
+            from_y: 0.0,
+            to_x: 10.0,
+            to_y: 10.0,
+        };
+        assert!(step.describe().contains("Drag"));
+    }
+
+    #[test]
+    fn test_step_describe_wait() {
+        let step = ScenarioStep::Wait { duration_ms: 100 };
+        assert!(step.describe().contains("Wait 100ms"));
+    }
+
+    #[test]
+    fn test_step_describe_screenshot_with_label() {
+        let step = ScenarioStep::Screenshot {
+            label: Some("before".into()),
+        };
+        assert!(step.describe().contains("Screenshot"));
+        assert!(step.describe().contains("before"));
+    }
+
+    #[test]
+    fn test_step_describe_screenshot_no_label() {
+        let step = ScenarioStep::Screenshot { label: None };
+        assert_eq!(step.describe(), "Screenshot");
+    }
+
+    #[test]
+    fn test_step_describe_spawn_app() {
+        let step = ScenarioStep::SpawnApp {
+            path: "/Apps/Calc.app".into(),
+        };
+        assert!(step.describe().contains("Spawn app"));
+    }
+
+    #[test]
+    fn test_step_describe_spawn_cli() {
+        let step = ScenarioStep::SpawnCli {
+            command: "npm".into(),
+            args: vec!["test".into()],
+        };
+        let desc = step.describe();
+        assert!(desc.contains("Spawn CLI"));
+        assert!(desc.contains("npm"));
+    }
+
+    #[test]
+    fn test_step_describe_assert_screenshot() {
+        let step = ScenarioStep::AssertScreenshotDiff {
+            label: Some("ref".into()),
+            max_diff_percentage: 0.05,
+        };
+        let desc = step.describe();
+        assert!(desc.contains("Assert screenshot diff"));
+        assert!(desc.contains("5.00%"));
+    }
+
+    #[test]
+    fn test_load_from_str_invalid() {
+        let result = ScenarioRunner::load_from_str(":::invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_file_not_found() {
+        let result =
+            ScenarioRunner::load_from_file(Path::new("/tmp/__nonexistent_scenario__.yaml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_file_valid() {
+        let yaml = r#"
+name: "file test"
+steps:
+  - type: wait
+    duration_ms: 50
+"#;
+        let tmp = std::env::temp_dir().join("test_scenario_file.yaml");
+        std::fs::write(&tmp, yaml).unwrap();
+        let scenario = ScenarioRunner::load_from_file(&tmp).unwrap();
+        assert_eq!(scenario.name, "file test");
+        assert_eq!(scenario.steps.len(), 1);
+        let _ = std::fs::remove_file(&tmp);
+    }
+}

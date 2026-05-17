@@ -247,3 +247,80 @@ fn default_recorder() {
     let recorder: ActionRecorder = Default::default();
     assert!(!recorder.is_enabled());
 }
+
+#[test]
+fn record_flushes_to_file() {
+    let tmp =
+        std::env::temp_dir().join(format!("recorder_flush_test_{}.jsonl", std::process::id()));
+    let recorder = ActionRecorder::new();
+    recorder.start(Some(tmp.clone())).unwrap();
+
+    recorder
+        .record(Action::Click {
+            x: 1.0,
+            y: 2.0,
+            button: "left".into(),
+            timestamp_ms: None,
+        })
+        .unwrap();
+    recorder
+        .record(Action::TypeText {
+            text: "hello".into(),
+            timestamp_ms: None,
+        })
+        .unwrap();
+
+    let _ = recorder.stop().unwrap();
+
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert!(content.contains("click"));
+    assert!(content.contains("type_text"));
+    let line_count = content.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(line_count, 2);
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn record_multiple_action_types_to_file() {
+    let tmp =
+        std::env::temp_dir().join(format!("recorder_multi_test_{}.jsonl", std::process::id()));
+    let recorder = ActionRecorder::new();
+    recorder.start(Some(tmp.clone())).unwrap();
+
+    let actions: Vec<Action> = vec![
+        Action::Wait {
+            duration_ms: 10,
+            timestamp_ms: None,
+        },
+        Action::Scroll {
+            x: 0.0,
+            y: 0.0,
+            direction: "down".into(),
+            amount: 1,
+            timestamp_ms: None,
+        },
+        Action::Drag {
+            from_x: 0.0,
+            from_y: 0.0,
+            to_x: 1.0,
+            to_y: 1.0,
+            timestamp_ms: None,
+        },
+        Action::Screenshot {
+            label: Some("test".into()),
+            timestamp_ms: None,
+        },
+    ];
+
+    for a in &actions {
+        recorder.record(a.clone()).unwrap();
+    }
+    let _ = recorder.stop().unwrap();
+
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert!(content.contains("wait"));
+    assert!(content.contains("scroll"));
+    assert!(content.contains("drag"));
+    assert!(content.contains("screenshot"));
+    let _ = std::fs::remove_file(&tmp);
+}

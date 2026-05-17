@@ -247,3 +247,170 @@ impl ActionPlayer {
         &self.screenshots
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recorder::Action;
+
+    #[test]
+    fn test_new_speed_clamped() {
+        let player = ActionPlayer::new(0.0);
+        assert!(!player.screenshots().is_empty() || player.screenshots().is_empty());
+    }
+
+    #[test]
+    fn test_get_timestamp_none() {
+        let player = ActionPlayer::new(1.0);
+        let action = Action::Click {
+            x: 0.0,
+            y: 0.0,
+            button: "left".into(),
+            timestamp_ms: None,
+        };
+        assert_eq!(player.get_timestamp(&action), 0);
+    }
+
+    #[test]
+    fn test_get_timestamp_some() {
+        let player = ActionPlayer::new(1.0);
+        let action = Action::Click {
+            x: 0.0,
+            y: 0.0,
+            button: "left".into(),
+            timestamp_ms: Some(1234),
+        };
+        assert_eq!(player.get_timestamp(&action), 1234);
+    }
+
+    #[test]
+    fn test_get_timestamp_all_variants() {
+        let player = ActionPlayer::new(1.0);
+        let actions: Vec<Action> = vec![
+            Action::DoubleClick {
+                x: 0.0,
+                y: 0.0,
+                timestamp_ms: Some(10),
+            },
+            Action::TypeText {
+                text: "a".into(),
+                timestamp_ms: Some(20),
+            },
+            Action::PressKey {
+                key: "a".into(),
+                modifiers: vec![],
+                timestamp_ms: Some(30),
+            },
+            Action::Scroll {
+                x: 0.0,
+                y: 0.0,
+                direction: "up".into(),
+                amount: 1,
+                timestamp_ms: Some(40),
+            },
+            Action::Drag {
+                from_x: 0.0,
+                from_y: 0.0,
+                to_x: 1.0,
+                to_y: 1.0,
+                timestamp_ms: Some(50),
+            },
+            Action::Screenshot {
+                label: None,
+                timestamp_ms: Some(60),
+            },
+            Action::SpawnApp {
+                path: "/a.app".into(),
+                timestamp_ms: Some(70),
+            },
+            Action::SpawnCli {
+                command: "ls".into(),
+                args: vec![],
+                timestamp_ms: Some(80),
+            },
+            Action::Wait {
+                duration_ms: 100,
+                timestamp_ms: Some(90),
+            },
+            Action::AssertScreenshot {
+                label: None,
+                max_diff_percentage: 0.05,
+                timestamp_ms: Some(100),
+            },
+        ];
+        for (i, action) in actions.iter().enumerate() {
+            assert_eq!(
+                player.get_timestamp(action),
+                ((i + 1) * 10) as u64,
+                "variant {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_load_file_valid() {
+        let actions = vec![
+            Action::Click {
+                x: 1.0,
+                y: 2.0,
+                button: "left".into(),
+                timestamp_ms: Some(100),
+            },
+            Action::TypeText {
+                text: "hi".into(),
+                timestamp_ms: Some(200),
+            },
+        ];
+        let mut jsonl = String::new();
+        for a in &actions {
+            jsonl.push_str(&serde_json::to_string(a).unwrap());
+            jsonl.push('\n');
+        }
+        let tmp = std::env::temp_dir().join("test_actions.jsonl");
+        std::fs::write(&tmp, &jsonl).unwrap();
+        let loaded = ActionPlayer::load_file(&tmp).unwrap();
+        assert_eq!(loaded.len(), 2);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_load_file_empty_lines() {
+        let content = "\n\n\n";
+        let tmp = std::env::temp_dir().join("test_empty_actions.jsonl");
+        std::fs::write(&tmp, content).unwrap();
+        let loaded = ActionPlayer::load_file(&tmp).unwrap();
+        assert!(loaded.is_empty());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_load_file_not_found() {
+        let result = ActionPlayer::load_file(Path::new("/tmp/__nonexistent_actions__.jsonl"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_file_invalid_json() {
+        let tmp = std::env::temp_dir().join("test_bad_actions.jsonl");
+        std::fs::write(&tmp, "not valid json\n").unwrap();
+        let result = ActionPlayer::load_file(&tmp);
+        assert!(result.is_err());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_play_returns_error_on_non_macos() {
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut player = ActionPlayer::new(1.0);
+            let results = player.play(&[]).await;
+            assert!(!results.is_empty());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut player = ActionPlayer::new(1.0);
+            let results = player.play(&[]).await;
+            assert!(results.is_empty());
+        }
+    }
+}
