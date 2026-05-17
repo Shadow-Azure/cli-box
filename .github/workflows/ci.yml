@@ -34,7 +34,7 @@ concurrency:
 env:
   NODE_VERSION: '22'
   PNPM_VERSION: '9'
-  RUST_VERSION: '1.88'
+  RUST_VERSION: '1.91'
 
 jobs:
   # ==================== Rust 格式化检查 ====================

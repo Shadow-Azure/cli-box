@@ -60,6 +60,7 @@ impl SandboxClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn scroll(&self, x: f64, y: f64, direction: &str, amount: i32) -> Result<()> {
         self.client
             .post(format!("{}/input/scroll", self.base_url))
@@ -69,6 +70,7 @@ impl SandboxClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn drag(&self, from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> Result<()> {
         self.client
             .post(format!("{}/input/drag", self.base_url))
@@ -135,6 +137,7 @@ impl SandboxClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn pty_write(&self, pid: u32, data: &str) -> Result<()> {
         self.client
             .post(format!("{}/pty/write", self.base_url))
@@ -144,6 +147,7 @@ impl SandboxClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn pty_read(&self, pid: u32) -> Result<Option<String>> {
         let resp = self
             .client
