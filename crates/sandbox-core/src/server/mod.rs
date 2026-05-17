@@ -468,6 +468,10 @@ mod tests {
     use tokio::sync::Mutex;
     use tower::ServiceExt;
 
+    fn has_screen_recording() -> bool {
+        std::env::var("HAS_SCREEN_RECORDING").as_deref() == Ok("1")
+    }
+
     fn test_state() -> Arc<Mutex<AppState>> {
         Arc::new(Mutex::new(AppState {
             sandbox_id: Some("test-sandbox-01".into()),
@@ -715,6 +719,9 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_uses_window_id_from_state() {
+        if !has_screen_recording() {
+            return;
+        }
         let app = test_router();
         let resp = app
             .oneshot(
@@ -725,13 +732,18 @@ mod tests {
             )
             .await
             .unwrap();
-        // 500 if no screen recording permission, 200 otherwise
+        // With screen recording but no real window 42: 404.
+        // If window 42 happens to exist: 200.
+        // Either is valid.
         let status = resp.status();
-        assert!(status == StatusCode::OK || status == StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn screenshot_region() {
+        if !has_screen_recording() {
+            return;
+        }
         let app = test_router();
         let resp = app
             .oneshot(
@@ -743,7 +755,7 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status();
-        assert!(status == StatusCode::OK || status == StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND);
     }
 
     // ── Windows / Processes ────────────────────────────────────
