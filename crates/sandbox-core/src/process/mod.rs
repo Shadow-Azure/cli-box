@@ -41,16 +41,32 @@ static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 pub struct ProcessManager;
 
 impl ProcessManager {
-    /// Launch a macOS .app by path using the `open` command
-    /// This avoids ObjC NSExceptions that crash the Rust process
+    /// Launch a macOS .app by path using the `open` command.
+    /// This avoids ObjC NSExceptions that crash the Rust process.
+    /// Returns (ProcessInfo, Option<SCWindow ID>) — the window is discovered by
+    /// searching for a title containing the app's stem name after a short delay.
     #[cfg(target_os = "macos")]
     pub fn spawn_app(app_path: &str) -> Result<ProcessInfo> {
+        let (info, _window_id) = Self::spawn_app_with_window(app_path)?;
+        Ok(info)
+    }
+
+    /// Launch a macOS .app and discover its SCWindow ID.
+    /// Returns both the process info and the discovered window ID (if found).
+    #[cfg(target_os = "macos")]
+    pub fn spawn_app_with_window(app_path: &str) -> Result<(ProcessInfo, Option<u32>)> {
         let path = std::path::Path::new(app_path);
         if !path.exists() {
             return Err(AppError::Process(format!(
                 "App path does not exist: {app_path}"
             )));
         }
+
+        let app_name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         let output = std::process::Command::new("open")
             .arg(app_path)
@@ -65,16 +81,25 @@ impl ProcessManager {
         }
 
         let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(ProcessInfo {
+        let info = ProcessInfo {
             pid: id,
-            name: std::path::Path::new(app_path)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
+            name: app_name.clone(),
             path: Some(app_path.to_string()),
             is_running: true,
-        })
+        };
+
+        // Wait for the app window to appear, then discover its SCWindow ID
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let window_id = crate::capture::ScreenCapture::find_window_by_title(&app_name).ok();
+
+        tracing::info!(
+            "Launched app: {} (tracked_id={}, window_id={:?})",
+            app_path,
+            id,
+            window_id
+        );
+
+        Ok((info, window_id))
     }
 
     #[cfg(not(target_os = "macos"))]

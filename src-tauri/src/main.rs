@@ -159,6 +159,9 @@ fn main() {
                     recorder: ActionRecorder::new(),
                 }));
 
+                // Clone for window discovery task
+                let state_for_window = state.clone();
+
                 let router = sandbox_core::server::build_router(state);
                 let port_val = port;
 
@@ -208,6 +211,23 @@ fn main() {
                         }
                     });
                 }
+
+                // Auto-discover the Tauri window's SCWindow ID for screenshot support.
+                // The window needs time to render before ScreenCaptureKit can find it.
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    match sandbox_core::capture::ScreenCapture::find_window_by_title(
+                        "System Test Sandbox",
+                    ) {
+                        Ok(id) => {
+                            tracing::info!("Discovered sandbox window: SCWindow ID={id}");
+                            state_for_window.lock().await.window_id = Some(id);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to discover sandbox window: {e}");
+                        }
+                    }
+                });
             }
 
             // Window close cleanup

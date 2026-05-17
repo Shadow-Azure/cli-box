@@ -44,8 +44,9 @@ mod macos_impl {
             rgba_to_png(&rgba, image.width(), image.height())
         }
 
-        /// Capture a region of a display
-        pub fn capture_region(_x: i32, _y: i32, width: u32, height: u32) -> Result<Vec<u8>> {
+        /// Capture a region of a display at the given screen coordinates.
+        /// Captures the full display and crops to (x, y, width, height) using the image crate.
+        pub fn capture_region(x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>> {
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
@@ -55,14 +56,18 @@ mod macos_impl {
                 .first()
                 .ok_or_else(|| AppError::Screenshot("No display found".into()))?;
 
+            let frame = display.frame();
+            let display_w = frame.width as u32;
+            let display_h = frame.height as u32;
+
             let filter = SCContentFilter::create()
                 .with_display(display)
                 .with_excluding_windows(&[])
                 .build();
 
             let config = SCStreamConfiguration::new()
-                .with_width(width)
-                .with_height(height);
+                .with_width(display_w)
+                .with_height(display_h);
 
             let image = SCScreenshotManager::capture_image(&filter, &config)
                 .map_err(|e| AppError::Screenshot(format!("Failed to capture region: {e:?}")))?;
@@ -71,7 +76,8 @@ mod macos_impl {
                 .rgba_data()
                 .map_err(|e| AppError::Screenshot(format!("Failed to get RGBA data: {e:?}")))?;
 
-            rgba_to_png(&rgba, image.width(), image.height())
+            // Crop to the requested region using the image crate
+            crop_rgba(&rgba, image.width(), image.height(), x, y, width, height)
         }
 
         /// Capture the sandbox window by searching for it by title
@@ -170,6 +176,48 @@ mod macos_impl {
         let mut cursor = Cursor::new(Vec::new());
         img.write_to(&mut cursor, image::ImageFormat::Png)
             .map_err(|e| AppError::Screenshot(format!("Failed to encode PNG: {e}")))?;
+
+        Ok(cursor.into_inner())
+    }
+
+    /// Crop RGBA pixel data to the specified region, then encode as PNG.
+    fn crop_rgba(
+        rgba: &[u8],
+        full_width: usize,
+        full_height: usize,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>> {
+        use image::imageops;
+        use image::{ImageBuffer, RgbaImage};
+        use std::io::Cursor;
+
+        let mut img: RgbaImage =
+            ImageBuffer::from_raw(full_width as u32, full_height as u32, rgba.to_vec())
+                .ok_or_else(|| {
+                    AppError::Screenshot("Failed to create image buffer from RGBA data".into())
+                })?;
+
+        let crop_x = x.max(0) as u32;
+        let crop_y = y.max(0) as u32;
+        let crop_w = width.min(full_width as u32 - crop_x);
+        let crop_h = height.min(full_height as u32 - crop_y);
+
+        if crop_w == 0 || crop_h == 0 {
+            return Err(AppError::Screenshot(format!(
+                "Crop region ({x}, {y}, {width}x{height}) is outside display bounds ({full_width}x{full_height})"
+            )));
+        }
+
+        let cropped = imageops::crop(&mut img, crop_x, crop_y, crop_w, crop_h);
+        let cropped_img = cropped.to_image();
+
+        let mut cursor = Cursor::new(Vec::new());
+        cropped_img
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .map_err(|e| AppError::Screenshot(format!("Failed to encode cropped PNG: {e}")))?;
 
         Ok(cursor.into_inner())
     }

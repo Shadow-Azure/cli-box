@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
+import * as api from "../api";
 import "xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -8,16 +9,21 @@ interface TerminalProps {
   onInput?: (data: string) => void;
   /** Whether the terminal is connected to a PTY */
   connected?: boolean;
+  /** The tracked PID of the active PTY process (null = none) */
+  activePid?: number | null;
 }
 
 export default function SandboxTerminal({
   onInput,
   connected = false,
+  activePid = null,
 }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Initialize xterm.js once
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
 
@@ -69,21 +75,54 @@ export default function SandboxTerminal({
       window.removeEventListener("resize", handleResize);
       term.dispose();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Public write method exposed via ref pattern
+  // PTY output polling — runs while activePid is set
   useEffect(() => {
-    if (xtermRef.current) {
-      (
-        xtermRef.current as Terminal & { _write?: (data: string) => void }
-      )._write = (data: string) => {
-        xtermRef.current?.write(data);
-      };
+    // Clear any existing poll
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
-  }, []);
+
+    if (activePid === null || activePid === undefined) return;
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const result = await api.ptyRead(activePid);
+        if (result.output) {
+          xtermRef.current?.write(result.output);
+        }
+      } catch {
+        // Process may have exited; stop polling
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }
+    }, 200);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [activePid]);
+
+  // Refit on window resize
+  const containerRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node) {
+        // Trigger fit after layout
+        requestAnimationFrame(() => fitAddonRef.current?.fit());
+      }
+    },
+    [],
+  );
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" ref={containerRef}>
       <div className="flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700">
         <span className="text-xs text-gray-400 font-medium">Terminal</span>
         <span
