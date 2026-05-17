@@ -1,6 +1,6 @@
-# System Test Sandbox — Release v0.2.0
+# System Test Sandbox — Release v0.1.0
 
-macOS 桌面自动化沙箱，支持多实例管理。通过一条命令启动沙箱并在其中运行 CLI 或 macOS 应用，模拟鼠标/键盘操作并获取截图反馈。
+macOS 桌面自动化沙箱。模拟鼠标/键盘操作、截图、读取 UI 元素树，通过 CLI 或 MCP 协议供 Agent 工具调用。
 
 ## 文件说明
 
@@ -27,71 +27,9 @@ release/
 
 授予方式：`系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制`，将 `sandbox` 或 `System Test Sandbox.app` 添加进去并勾选。
 
-## 二、多实例沙箱管理（核心功能）
+## 二、CLI 使用方法
 
-### 启动沙箱
-
-```bash
-# 启动沙箱，运行 Claude Code 终端 → 返回沙箱 ID
-./sandbox start --cli "claude"
-# 输出: Starting sandbox: a1b2c3d4 (claude) on port 15801
-#       Sandbox started: a1b2c3d4
-
-# 启动沙箱，运行任意 CLI 命令
-./sandbox start --cli "vim" --args "test.txt"
-./sandbox start --cli "python3" --args "-i"
-
-# 启动沙箱，运行 macOS 应用
-./sandbox start --app "/System/Applications/TextEdit.app"
-./sandbox start --app "/Applications/cc-switch.app"
-```
-
-### 查看和管理沙箱
-
-```bash
-# 列出所有活跃沙箱
-./sandbox list
-# ID       TITLE                    KIND   STATUS     PORT   CREATED
-# a1b2c3d4 claude                   CLI    Running    15801  2026-05-17 10:30:00
-# e5f6g7h8 TextEdit                 APP    Running    15802  2026-05-17 10:31:00
-
-# 查看沙箱详情
-./sandbox inspect a1b2c3d4
-
-# 关闭沙箱（自动清理注册 + 终止进程）
-./sandbox close a1b2c3d4
-```
-
-### 操作沙箱内目标
-
-```bash
-# 截取指定沙箱截图
-./sandbox screenshot --id a1b2c3d4 -o result.png
-
-# 在指定沙箱内模拟点击
-./sandbox click --id a1b2c3d4 500 300
-
-# 在指定沙箱内模拟输入
-./sandbox type --id a1b2c3d4 "hello world"
-
-# 在指定沙箱内模拟按键
-./sandbox key --id a1b2c3d4 Return
-./sandbox key --id a1b2c3d4 c --modifiers cmd
-
-# 查看沙箱内窗口
-./sandbox windows --id a1b2c3d4
-
-# 查看沙箱内进程
-./sandbox processes --id a1b2c3d4
-
-# 在沙箱内启动新的 CLI
-./sandbox spawn-cli --id a1b2c3d4 "ls" -la
-
-# 终止沙箱内进程
-./sandbox kill --id a1b2c3d4 12345
-```
-
-## 三、独立 HTTP 服务模式（向后兼容）
+### 启动 HTTP + MCP 服务（最常用）
 
 ```bash
 ./sandbox serve --port 5801
@@ -101,9 +39,7 @@ release/
 
 ```
 GET  http://127.0.0.1:5801/health              # 健康检查
-GET  http://127.0.0.1:5801/sandbox/info         # 沙箱信息
-POST http://127.0.0.1:5801/shutdown             # 关闭沙箱
-GET  http://127.0.0.1:5801/screenshot           # 截图 (PNG)
+GET  http://127.0.0.1:5801/screenshot           # 截取沙箱窗口 (PNG)
 POST http://127.0.0.1:5801/input/click          # 鼠标点击
 POST http://127.0.0.1:5801/input/type           # 键盘输入
 POST http://127.0.0.1:5801/input/key            # 按键
@@ -111,12 +47,10 @@ POST http://127.0.0.1:5801/cli/spawn            # 启动 CLI 进程
 POST http://127.0.0.1:5801/app/spawn            # 启动 macOS 应用
 GET  http://127.0.0.1:5801/windows              # 列出窗口
 GET  http://127.0.0.1:5801/processes            # 列出进程
-POST http://127.0.0.1:5801/pty/write            # 写入 PTY
-GET  http://127.0.0.1:5801/pty/output/:pid      # 读取 PTY 输出
 GET  http://127.0.0.1:5801/ui/inspect/:window   # 读取 UI 树
 ```
 
-## 四、MCP 服务（供 Claude Code / OpenCode 调用）
+### 启动 MCP 服务（供 Claude Code / Codex 调用）
 
 ```bash
 ./sandbox mcp-serve
@@ -135,9 +69,36 @@ GET  http://127.0.0.1:5801/ui/inspect/:window   # 读取 UI 树
 }
 ```
 
-MCP 工具列表：screenshot, click, double_click, type_text, press_key, scroll, spawn_cli, spawn_app, kill_process, list_processes, list_windows, inspect_ui, find_element, get_element_value, record_start, record_stop, play_actions, run_scenario, diff_screenshot
+### 一次性命令
 
-## 五、curl 调用示例
+```bash
+# 截图
+./sandbox screenshot -o result.png
+
+# 列出所有窗口
+./sandbox windows
+
+# 模拟点击
+./sandbox click 500 300
+
+# 模拟打字
+./sandbox type "Hello World"
+
+# 模拟按键
+./sandbox key Return
+./sandbox key c --modifiers cmd
+
+# 启动 App
+./sandbox spawn-app /Applications/Calculator.app
+
+# 启动 CLI
+./sandbox spawn-cli ls -la
+
+# 终止进程
+./sandbox kill 12345
+```
+
+### curl 调用示例
 
 ```bash
 # 截图
@@ -153,18 +114,24 @@ curl -X POST http://127.0.0.1:5801/input/type \
   -H "Content-Type: application/json" \
   -d '{"text": "hello"}'
 
+# 按回车
+curl -X POST http://127.0.0.1:5801/input/key \
+  -H "Content-Type: application/json" \
+  -d '{"key": "Return", "modifiers": []}'
+
 # 启动 CLI
 curl -X POST http://127.0.0.1:5801/cli/spawn \
   -H "Content-Type: application/json" \
   -d '{"command": "ls", "args": ["-la"]}'
 ```
 
-## 六、桌面应用
+## 三、桌面应用使用方法
 
 1. 双击 `System Test Sandbox.app` 启动
-2. 可通过 CLI `./sandbox start --cli "xxx"` 自动启动并关联
+2. 应用窗口内嵌 xterm.js 终端，可直接运行 CLI 命令
+3. 顶部状态栏提供截图按钮
 
-## 七、常见问题
+## 四、常见问题
 
 **Q: 截图全黑？**
 A: 检查「屏幕录制」权限是否已授予。
@@ -172,29 +139,12 @@ A: 检查「屏幕录制」权限是否已授予。
 **Q: 点击/输入无效？**
 A: 检查「辅助功能」权限是否已授予。
 
-**Q: `start` 启动后没有打开窗口？**
-A: 如果 Tauri 桌面应用不在同目录，CLI 会自动 fallback 到 standalone HTTP 模式。通过返回的端口可直接 curl 调用。
-
 **Q: `serve` 端口被占用？**
-A: 使用 `./sandbox serve --port 5802` 更换端口。`start` 命令会自动分配端口。
+A: 使用 `./sandbox serve --port 5802` 更换端口。
 
 **Q: MCP 连接失败？**
 A: 确认 `settings.json` 中的 `command` 路径是绝对路径。
 
-**Q: 如何清理残留的沙箱注册？**
-A: 删除 `~/.sandbox/instances/` 目录下的 `.json` 文件。
-
 ---
 
-## 八、已知问题 (v0.2.1)
-
-1. **Standalone 模式截图**: standalone server 模式下 `sandbox screenshot --id <id>` 返回 503，需要 Tauri app 窗口才能截图。
-
----
-
-**版本**: v0.2.1 | **构建时间**: 2026-05-17 | **测试报告**: `release_test/2026-05-17-19-09-00/REPORT.md`
-
-### v0.2.1 修复
-
-- **macOS 26 rpath 崩溃**: 已通过 build.rs 自动添加 `LC_RPATH=/usr/lib/swift`，不再需要手动 `install_name_tool`
-- **AXUIElement SEGFAULT**: 已添加 `AXIsProcessTrusted()` 权限检查 + `AXUIElementGetPid` 元素验证，无效元素不再导致崩溃
+**版本**: v0.1.0 | **构建时间**: 2026-05-17 23:04

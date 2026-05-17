@@ -45,6 +45,14 @@ check node
 check pnpm
 ok "All prerequisites met"
 
+# --- step 1.5: clean up old processes & registries ---
+echo ""
+info "Cleaning up old sandbox processes..."
+pkill -f "system-test-sandbox" 2>/dev/null || true
+pkill -f "sandbox-cli" 2>/dev/null || true
+rm -f ~/.sandbox/instances/*.json 2>/dev/null || true
+ok "Cleanup done"
+
 # --- step 2: build frontend ---
 echo ""
 info "Building frontend (sandbox-web)..."
@@ -116,6 +124,8 @@ chmod +x "$RELEASE_DIR/sandbox"
 
 # Fix rpath for Swift Concurrency (required by ScreenCaptureKit)
 install_name_tool -add_rpath /usr/lib/swift "$RELEASE_DIR/sandbox" 2>/dev/null || true
+	# Embed entitlements for ScreenCaptureKit & Accessibility (ad-hoc signing)
+	codesign --force --sign - --entitlements "$SCRIPT_DIR/src-tauri/entitlements.plist" "$RELEASE_DIR/sandbox" 2>/dev/null || true
 ok "sandbox CLI binary"
 
 # Tauri .app
@@ -125,6 +135,8 @@ if [ -d "$APP_BUNDLE" ]; then
     APP_EXEC="$RELEASE_DIR/${APP_NAME}.app/Contents/MacOS/system-test-sandbox"
     if [ -f "$APP_EXEC" ]; then
         install_name_tool -add_rpath /usr/lib/swift "$APP_EXEC" 2>/dev/null || true
+        # Embed entitlements for ScreenCaptureKit & Accessibility (ad-hoc signing)
+        codesign --force --sign - --entitlements "$SCRIPT_DIR/src-tauri/entitlements.plist" "$APP_EXEC" 2>/dev/null || true
     fi
     ok "$APP_NAME.app"
 fi
@@ -134,6 +146,23 @@ DMG_FILE=$(ls "$DMG_PATH"/*.dmg 2>/dev/null | head -1)
 if [ -n "$DMG_FILE" ]; then
     cp "$DMG_FILE" "$RELEASE_DIR/"
     ok "$(basename "$DMG_FILE")"
+fi
+
+# --- entitlement verification ---
+echo ""
+info "Verifying entitlements..."
+APP_EXEC="$RELEASE_DIR/${APP_NAME}.app/Contents/MacOS/system-test-sandbox"
+if [ -f "$APP_EXEC" ]; then
+    if codesign -d --entitlements - "$APP_EXEC" 2>/dev/null | grep -q "screen-capture"; then
+        ok "ScreenCaptureKit entitlement embedded in app"
+    else
+        err "ScreenCaptureKit entitlement NOT found in app!"
+    fi
+    if codesign -d --entitlements - "$RELEASE_DIR/sandbox" 2>/dev/null | grep -q "screen-capture"; then
+        ok "ScreenCaptureKit entitlement embedded in CLI"
+    else
+        err "ScreenCaptureKit entitlement NOT found in CLI!"
+    fi
 fi
 
 # Generate README (inline, see step 6)
