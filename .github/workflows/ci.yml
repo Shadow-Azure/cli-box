@@ -325,9 +325,63 @@ jobs:
         working-directory: sandbox-web
         run: pnpm install --frozen-lockfile
 
-      - name: 运行单元测试
+      - name: 运行单元测试 + 覆盖率
         working-directory: sandbox-web
-        run: pnpm test:unit
+        run: pnpm vitest run --coverage
+
+      - name: 生成覆盖率摘要
+        if: always()
+        run: |
+          SUMMARY_FILE="frontend-coverage-summary.md"
+          echo "## 前端测试覆盖率" > "$SUMMARY_FILE"
+          echo "" >> "$SUMMARY_FILE"
+          COV_JSON="sandbox-web/coverage/coverage-summary.json"
+          if [ -f "$COV_JSON" ]; then
+            python3 -c "
+          import json
+          with open('$COV_JSON') as f:
+              data = json.load(f)
+          total = data.get('total', {})
+          lines_pct = total.get('lines', {}).get('pct', 0)
+          branches_pct = total.get('branches', {}).get('pct', 0)
+          functions_pct = total.get('functions', {}).get('pct', 0)
+          statements_pct = total.get('statements', {}).get('pct', 0)
+          print(f'| 指标 | 覆盖率 |')
+          print(f'|------|--------|')
+          print(f'| 语句 | {statements_pct:.1f}% |')
+          print(f'| 分支 | {branches_pct:.1f}% |')
+          print(f'| 函数 | {functions_pct:.1f}% |')
+          print(f'| 行 | {lines_pct:.1f}% |')
+          print()
+          print('| 文件 | 行覆盖率 |')
+          print('|------|----------|')
+          for fpath, metrics in sorted(data.items()):
+              if fpath == 'total':
+                  continue
+              fname = fpath.replace('src/', '')
+              f_lines = metrics.get('lines', {}).get('pct', 0)
+              bar_len = int(f_lines / 5)
+              bar = '█' * bar_len + '░' * (20 - bar_len)
+              print(f'| {fname} | {bar} {f_lines:.1f}% |')
+          " >> "$SUMMARY_FILE"
+            echo "" >> "$SUMMARY_FILE"
+            echo "> 详细报告见前端覆盖率 artifact" >> "$SUMMARY_FILE"
+          else
+            echo "> ⚠️ 未生成前端覆盖率报告" >> "$SUMMARY_FILE"
+            echo "❌ 前端覆盖率生成失败：coverage-summary.json 未生成" >> "$SUMMARY_FILE"
+            echo "::error::前端覆盖率报告生成失败，检查 vitest --coverage 输出"
+            exit 1
+          fi
+          echo "" >> "$SUMMARY_FILE"
+          cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传覆盖率摘要
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-coverage-summary
+          path: frontend-coverage-summary.md
+          retention-days: 1
 
   # ==================== 安全检查 ====================
   security:
@@ -429,7 +483,6 @@ jobs:
         with:
           name: frontend-coverage-summary
           path: coverage-artifacts
-        continue-on-error: true
 
       - name: 检查门禁结果
         run: |
