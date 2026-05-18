@@ -10,12 +10,25 @@ mod macos_impl {
     use screencapturekit::shareable_content::SCShareableContent;
     use screencapturekit::stream::configuration::SCStreamConfiguration;
     use screencapturekit::stream::content_filter::SCContentFilter;
+    use std::sync::Once;
+
+    static CG_INIT: Once = Once::new();
+
+    /// Ensure CoreGraphics is initialized before ScreenCaptureKit calls.
+    /// Without this, `SCShareableContent::get()` (async path) triggers
+    /// `CGS_REQUIRE_INIT` assertion when run from non-GUI context.
+    fn ensure_cg_initialized() {
+        CG_INIT.call_once(|| {
+            unsafe { screencapturekit::ffi::sc_initialize_core_graphics(); }
+        });
+    }
 
     impl ScreenCapture {
         /// Capture a specific window by its SCWindow ID.
         /// Returns PNG-encoded image bytes.
         /// Works even when the window is behind other windows.
         pub fn capture_window(window_id: u32) -> Result<Vec<u8>> {
+            ensure_cg_initialized();
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
@@ -47,6 +60,7 @@ mod macos_impl {
         /// Capture a region of a display at the given screen coordinates.
         /// Captures the full display and crops to (x, y, width, height) using the image crate.
         pub fn capture_region(x: i32, y: i32, width: u32, height: u32) -> Result<Vec<u8>> {
+            ensure_cg_initialized();
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
@@ -82,12 +96,14 @@ mod macos_impl {
 
         /// Capture the sandbox window by searching for it by title
         pub fn capture_sandbox() -> Result<Vec<u8>> {
+            ensure_cg_initialized();
             Self::capture_sandbox_by_id(None)
         }
 
         /// Capture the sandbox window, optionally by a specific window ID.
         /// If window_id is None, searches for a window titled "System Test Sandbox".
         pub fn capture_sandbox_by_id(window_id: Option<u32>) -> Result<Vec<u8>> {
+            ensure_cg_initialized();
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
@@ -136,6 +152,7 @@ mod macos_impl {
 
         /// Find a window by title substring
         pub fn find_window_by_title(title: &str) -> Result<u32> {
+            ensure_cg_initialized();
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;
@@ -150,6 +167,7 @@ mod macos_impl {
 
         /// List all available windows with their IDs and titles
         pub fn list_windows() -> Result<Vec<(u32, String)>> {
+            ensure_cg_initialized();
             let content = SCShareableContent::get().map_err(|e| {
                 AppError::Screenshot(format!("Failed to get shareable content: {e:?}"))
             })?;

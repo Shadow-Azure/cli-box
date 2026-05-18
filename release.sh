@@ -4,12 +4,10 @@ set -euo pipefail
 # ============================================================
 # system-test-sandbox — Release Build Script
 # ============================================================
-# Builds both the CLI binary and the macOS app, then packages
-# them into ./release/ for distribution.
+# Builds the CLI binary and packages it into ./release/.
 #
 # Prerequisites:
-#   - Rust >= 1.88
-#   - Node.js + pnpm
+#   - Rust >= 1.91
 #   - macOS (Apple Silicon or Intel)
 # ============================================================
 
@@ -41,134 +39,39 @@ echo ""
 info "Checking prerequisites..."
 check rustc
 check cargo
-check node
-check pnpm
 ok "All prerequisites met"
 
-# --- step 1.5: clean up old processes & registries ---
+# --- step 2: clean up old processes & registries ---
 echo ""
 info "Cleaning up old sandbox processes..."
 pkill -f "system-test-sandbox" 2>/dev/null || true
 pkill -f "sandbox-cli" 2>/dev/null || true
+# Only kill our own sandbox binary, not VSCode or other apps that contain "sandbox" in their path
+pkill -x "sandbox" 2>/dev/null || true
 rm -f ~/.sandbox/instances/*.json 2>/dev/null || true
 ok "Cleanup done"
 
-# --- step 2: build frontend ---
-echo ""
-info "Building frontend (sandbox-web)..."
-cd "$SCRIPT_DIR/sandbox-web"
-
-if [ ! -d "node_modules" ]; then
-    pnpm install --frozen-lockfile
-fi
-pnpm build
-ok "Frontend built -> sandbox-web/dist/"
-
-# --- step 3: build CLI binary ---
+# --- step 3: build CLI binary (release) ---
 echo ""
 info "Building CLI binary (release)..."
-cd "$SCRIPT_DIR"
 cargo build --release -p sandbox-cli
 CLI_BIN="$SCRIPT_DIR/target/release/sandbox"
+if [ ! -f "$CLI_BIN" ]; then
+    err "CLI binary not found at $CLI_BIN"
+fi
 ok "CLI binary built: $(du -h "$CLI_BIN" | cut -f1)"
 
-# --- step 4: build Tauri app ---
-echo ""
-info "Building Tauri desktop app..."
-
-cd "$SCRIPT_DIR"
-
-# Try cargo-tauri if installed, otherwise install it
-if ! cargo tauri --version &>/dev/null; then
-    info "Installing tauri-cli (one-time) ..."
-    cargo install tauri-cli --version "^2"
-fi
-
-APP_NAME="System Test Sandbox"
-cargo tauri build --target universal-apple-darwin 2>/dev/null || cargo tauri build
-
-TAURI_BUILD_DIR="$SCRIPT_DIR/target/release/bundle/macos"
-APP_BUNDLE="$TAURI_BUILD_DIR/${APP_NAME}.app"
-DMG_PATH="$SCRIPT_DIR/target/release/bundle/dmg"
-
-if [ -d "$APP_BUNDLE" ]; then
-    ok "Tauri app built: $APP_BUNDLE"
-else
-    # Fallback: manually assemble .app from cargo binary
-    info "Manually assembling .app bundle..."
-    cargo build --release -p system-test-sandbox
-    APP_BUNDLE="$TAURI_BUILD_DIR/${APP_NAME}.app"
-    mkdir -p "$APP_BUNDLE/Contents/MacOS"
-    mkdir -p "$APP_BUNDLE/Contents/Resources"
-    cp "$SCRIPT_DIR/target/release/system-test-sandbox" "$APP_BUNDLE/Contents/MacOS/"
-    # Copy Info.plist if exists
-    if [ -f "$SCRIPT_DIR/src-tauri/Info.plist" ]; then
-        cp "$SCRIPT_DIR/src-tauri/Info.plist" "$APP_BUNDLE/Contents/"
-    fi
-    # Copy icons
-    if [ -f "$SCRIPT_DIR/src-tauri/icons/icon.icns" ]; then
-        cp "$SCRIPT_DIR/src-tauri/icons/icon.icns" "$APP_BUNDLE/Contents/Resources/"
-    fi
-    ok ".app bundle manually assembled"
-fi
-
-# --- step 5: assemble release folder ---
+# --- step 4: assemble release folder ---
 echo ""
 info "Assembling release artifacts -> $RELEASE_DIR"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
-# CLI binary
 cp "$CLI_BIN" "$RELEASE_DIR/sandbox"
 chmod +x "$RELEASE_DIR/sandbox"
-
-# Fix rpath for Swift Concurrency (required by ScreenCaptureKit)
-install_name_tool -add_rpath /usr/lib/swift "$RELEASE_DIR/sandbox" 2>/dev/null || true
-	# Embed entitlements for ScreenCaptureKit & Accessibility (ad-hoc signing)
-	codesign --force --sign - --entitlements "$SCRIPT_DIR/src-tauri/entitlements.plist" "$RELEASE_DIR/sandbox" 2>/dev/null || true
 ok "sandbox CLI binary"
 
-# Tauri .app
-if [ -d "$APP_BUNDLE" ]; then
-    cp -R "$APP_BUNDLE" "$RELEASE_DIR/"
-    # Fix rpath for the app binary too
-    APP_EXEC="$RELEASE_DIR/${APP_NAME}.app/Contents/MacOS/system-test-sandbox"
-    if [ -f "$APP_EXEC" ]; then
-        install_name_tool -add_rpath /usr/lib/swift "$APP_EXEC" 2>/dev/null || true
-        # Embed entitlements for ScreenCaptureKit & Accessibility (ad-hoc signing)
-        codesign --force --sign - --entitlements "$SCRIPT_DIR/src-tauri/entitlements.plist" "$APP_EXEC" 2>/dev/null || true
-    fi
-    ok "$APP_NAME.app"
-fi
-
-# DMG installer
-DMG_FILE=$(ls "$DMG_PATH"/*.dmg 2>/dev/null | head -1)
-if [ -n "$DMG_FILE" ]; then
-    cp "$DMG_FILE" "$RELEASE_DIR/"
-    ok "$(basename "$DMG_FILE")"
-fi
-
-# --- entitlement verification ---
-echo ""
-info "Verifying entitlements..."
-APP_EXEC="$RELEASE_DIR/${APP_NAME}.app/Contents/MacOS/system-test-sandbox"
-if [ -f "$APP_EXEC" ]; then
-    if codesign -d --entitlements - "$APP_EXEC" 2>/dev/null | grep -q "screen-capture"; then
-        ok "ScreenCaptureKit entitlement embedded in app"
-    else
-        err "ScreenCaptureKit entitlement NOT found in app!"
-    fi
-    if codesign -d --entitlements - "$RELEASE_DIR/sandbox" 2>/dev/null | grep -q "screen-capture"; then
-        ok "ScreenCaptureKit entitlement embedded in CLI"
-    else
-        err "ScreenCaptureKit entitlement NOT found in CLI!"
-    fi
-fi
-
-# Generate README (inline, see step 6)
-ok "Release artifacts ready"
-
-# --- step 6: generate README ---
+# --- step 5: generate README ---
 echo ""
 info "Generating README.md..."
 
@@ -177,15 +80,14 @@ BUILD_DATE="$(date '+%Y-%m-%d %H:%M')"
 cat > "$RELEASE_DIR/README.md" << 'RELEASEREADME'
 # System Test Sandbox — Release v0.1.0
 
-macOS 桌面自动化沙箱。模拟鼠标/键盘操作、截图、读取 UI 元素树，通过 CLI 或 MCP 协议供 Agent 工具调用。
+macOS 桌面自动化沙箱 CLI。在 Terminal.app 窗口中启动任意命令，截取窗口截图，支持 PTY 交互。
 
 ## 文件说明
 
 ```
 release/
-├── sandbox                        # CLI 工具（命令行）
-├── System Test Sandbox.app        # macOS 桌面应用（Tauri）
-└── README.md                      # 本文件
+├── sandbox        # CLI 工具（命令行）
+└── README.md      # 本文件
 ```
 
 ## 一、前置条件
@@ -202,113 +104,44 @@ release/
 1. **辅助功能 (Accessibility)**：用于 CGEvent 输入模拟 + AXUIElement UI 读取
 2. **屏幕录制 (Screen Recording)**：用于 ScreenCaptureKit 截图
 
-授予方式：`系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制`，将 `sandbox` 或 `System Test Sandbox.app` 添加进去并勾选。
+授予方式：`系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制`，将 `sandbox` 添加进去并勾选。
 
 ## 二、CLI 使用方法
 
-### 启动 HTTP + MCP 服务（最常用）
+### Phase 1: 在沙箱中运行命令 + 截图
 
 ```bash
-./sandbox serve --port 5801
-```
+# 在 Terminal.app 中启动命令（如 Claude Code）
+./sandbox start claude
 
-启动后可用端点：
+# 截取沙箱窗口截图（自动发现 Terminal 窗口）
+./sandbox screenshot -o screenshot.png
 
-```
-GET  http://127.0.0.1:5801/health              # 健康检查
-GET  http://127.0.0.1:5801/screenshot           # 截取沙箱窗口 (PNG)
-POST http://127.0.0.1:5801/input/click          # 鼠标点击
-POST http://127.0.0.1:5801/input/type           # 键盘输入
-POST http://127.0.0.1:5801/input/key            # 按键
-POST http://127.0.0.1:5801/cli/spawn            # 启动 CLI 进程
-POST http://127.0.0.1:5801/app/spawn            # 启动 macOS 应用
-GET  http://127.0.0.1:5801/windows              # 列出窗口
-GET  http://127.0.0.1:5801/processes            # 列出进程
-GET  http://127.0.0.1:5801/ui/inspect/:window   # 读取 UI 树
-```
+# 指定窗口 ID 截图
+./sandbox screenshot --window-id 12345 -o screenshot.png
 
-### 启动 MCP 服务（供 Claude Code / Codex 调用）
-
-```bash
-./sandbox mcp-serve
-```
-
-在 `.claude/settings.json` 中配置：
-
-```json
-{
-  "mcpServers": {
-    "sandbox": {
-      "command": "/absolute/path/to/release/sandbox",
-      "args": ["mcp-serve"]
-    }
-  }
-}
-```
-
-### 一次性命令
-
-```bash
-# 截图
-./sandbox screenshot -o result.png
-
-# 列出所有窗口
+# 列出所有可见窗口
 ./sandbox windows
 
-# 模拟点击
-./sandbox click 500 300
-
-# 模拟打字
-./sandbox type "Hello World"
-
-# 模拟按键
-./sandbox key Return
-./sandbox key c --modifiers cmd
-
-# 启动 App
-./sandbox spawn-app /Applications/Calculator.app
-
-# 启动 CLI
-./sandbox spawn-cli ls -la
-
-# 终止进程
-./sandbox kill 12345
+# 关闭沙箱（关闭 Terminal 窗口）
+./sandbox shutdown
 ```
 
-### curl 调用示例
+### 示例工作流
 
 ```bash
-# 截图
-curl http://127.0.0.1:5801/screenshot -o screenshot.png
+# 启动 Claude Code
+./sandbox start claude
+# 等待 Claude 启动...
 
-# 点击
-curl -X POST http://127.0.0.1:5801/input/click \
-  -H "Content-Type: application/json" \
-  -d '{"x": 100, "y": 200, "button": "left"}'
+# 截图查看状态
+./sandbox screenshot -o before.png
 
-# 输入文字
-curl -X POST http://127.0.0.1:5801/input/type \
-  -H "Content-Type: application/json" \
-  -d '{"text": "hello"}'
-
-# 按回车
-curl -X POST http://127.0.0.1:5801/input/key \
-  -H "Content-Type: application/json" \
-  -d '{"key": "Return", "modifiers": []}'
-
-# 启动 CLI
-curl -X POST http://127.0.0.1:5801/cli/spawn \
-  -H "Content-Type: application/json" \
-  -d '{"command": "ls", "args": ["-la"]}'
+# 关闭沙箱
+./sandbox shutdown
 ```
 
-## 三、桌面应用使用方法
-
-1. 双击 `System Test Sandbox.app` 启动
-2. 应用窗口内嵌 xterm.js 终端，可直接运行 CLI 命令
-3. 顶部状态栏提供截图按钮
-
-## 四、常见问题
+## 三、常见问题
 
 **Q: 截图全黑？**
 A: 检查「屏幕录制」权限是否已授予。
@@ -316,11 +149,8 @@ A: 检查「屏幕录制」权限是否已授予。
 **Q: 点击/输入无效？**
 A: 检查「辅助功能」权限是否已授予。
 
-**Q: `serve` 端口被占用？**
-A: 使用 `./sandbox serve --port 5802` 更换端口。
-
-**Q: MCP 连接失败？**
-A: 确认 `settings.json` 中的 `command` 路径是绝对路径。
+**Q: 无法自动发现窗口？**
+A: 使用 `./sandbox windows` 列出所有窗口，然后用 `--window-id` 指定。
 
 ---
 
