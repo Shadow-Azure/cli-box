@@ -361,7 +361,6 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use base64::Engine;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tower::ServiceExt;
