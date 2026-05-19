@@ -13,8 +13,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tower_http::cors::{Any, CorsLayer};
 use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 
 /// Shared application state for the HTTP server
 pub struct AppState {

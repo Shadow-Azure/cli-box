@@ -84,10 +84,7 @@ fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
     let app_binary = bundle_path.join("Contents/MacOS/system-test-sandbox");
 
     // Build Tauri args: --mode=cli --cmd=<command> [-- <extra args>]
-    let mut tauri_args = vec![
-        "--mode=cli".to_string(),
-        format!("--cmd={}", command),
-    ];
+    let mut tauri_args = vec!["--mode=cli".to_string(), format!("--cmd={}", command)];
     if !args.is_empty() {
         tauri_args.push("--".to_string());
         tauri_args.extend(args.iter().cloned());
@@ -204,16 +201,15 @@ fn cmd_shutdown() -> anyhow::Result<()> {
     let windows = ScreenCapture::list_windows()
         .context("Failed to list windows. Is Screen Recording permission granted?")?;
 
-    let tauri_window = windows.iter().find(|(_, title)| {
-        title.starts_with("System Test Sandbox")
-    });
+    let tauri_window = windows
+        .iter()
+        .find(|(_, title)| title.starts_with("System Test Sandbox"));
 
     if let Some((id, title)) = tauri_window {
         // Close the Tauri app window — this also terminates the process
         println!("Closing sandbox window: {} (ID: {})", title, id);
         // Use osascript to close the window via its process
-        let script = format!(
-            r#"tell application "System Events"
+        let script = r#"tell application "System Events"
     set procList to every process whose name is "system-test-sandbox"
     repeat with proc in procList
         set winList to every window of proc
@@ -222,7 +218,7 @@ fn cmd_shutdown() -> anyhow::Result<()> {
         end repeat
     end repeat
 end tell"#
-        );
+            .to_string();
         let _ = Command::new("osascript").arg("-e").arg(&script).output();
     } else {
         // Fallback: close Terminal.app first window
