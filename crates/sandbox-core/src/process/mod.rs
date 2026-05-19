@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Mutex;
+use tracing::{debug, info, trace, warn};
 
 #[cfg(target_os = "macos")]
 use {
@@ -20,10 +21,15 @@ pub struct ProcessInfo {
     pub is_running: bool,
 }
 
-/// PTY session holding the reader/writer handles for I/O
+/// PTY session holding the reader/writer handles for I/O.
+///
+/// The reader is wrapped in `Option` so `read_output` can temporarily
+/// take it out of the session before performing a potentially-blocking
+/// read — this avoids holding the global `SESSIONS` lock across I/O,
+/// which would starve the tokio runtime.
 #[cfg(target_os = "macos")]
 struct PtySession {
-    reader: Box<dyn std::io::Read + Send>,
+    reader: Option<Box<dyn std::io::Read + Send>>,
     writer: Box<dyn std::io::Write + Send>,
     #[allow(dead_code)]
     child_pid: u32,
@@ -92,7 +98,7 @@ impl ProcessManager {
         std::thread::sleep(std::time::Duration::from_millis(800));
         let window_id = crate::capture::ScreenCapture::find_window_by_title(&app_name).ok();
 
-        tracing::info!(
+        info!(
             "Launched app: {} (tracked_id={}, window_id={:?})",
             app_path,
             id,
@@ -151,14 +157,14 @@ impl ProcessManager {
         sessions.insert(
             tracked_id,
             PtySession {
-                reader,
+                reader: Some(reader),
                 writer,
                 child_pid: child_pid.unwrap_or(0),
                 command: command.to_string(),
             },
         );
 
-        tracing::info!(
+        info!(
             "Spawned CLI: {} (tracked_id={}, os_pid={:?})",
             command,
             tracked_id,
@@ -214,7 +220,7 @@ impl ProcessManager {
             }
             // Dropping the master closes the PTY
             drop(session);
-            tracing::info!("Killed process: tracked_id={}, os_pid={}", pid, os_pid);
+            info!("Killed process: tracked_id={}, os_pid={}", pid, os_pid);
         } else {
             return Err(AppError::Process(format!(
                 "Process {pid} not found in sandbox"
@@ -260,24 +266,61 @@ impl ProcessManager {
         ))
     }
 
-    /// Read output from a PTY process (non-blocking)
+    /// Read output from a PTY process.
+    ///
+    /// Takes the reader out of the session before reading so that the
+    /// global `SESSIONS` lock is NOT held across the potentially-blocking
+    /// `read()` call.  Without this, a PTY with no available data can
+    /// starve the tokio runtime by blocking a worker thread that holds
+    /// the lock.
     #[cfg(target_os = "macos")]
     pub fn read_output(pid: u32) -> Result<Option<String>> {
         use std::io::Read;
-        let mut sessions = SESSIONS
-            .lock()
-            .map_err(|e| AppError::Process(e.to_string()))?;
-        if let Some(session) = sessions.get_mut(&pid) {
-            let mut buf = [0u8; 4096];
-            match session.reader.read(&mut buf) {
-                Ok(0) => Ok(None),
-                Ok(n) => Ok(Some(String::from_utf8_lossy(&buf[..n]).to_string())),
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-                Err(e) => Err(AppError::Process(format!("Failed to read PTY: {e}"))),
+
+        // Step 1 – take the reader out (briefly hold the lock)
+        let mut reader = {
+            let mut sessions = SESSIONS
+                .lock()
+                .map_err(|e| AppError::Process(e.to_string()))?;
+            sessions
+                .get_mut(&pid)
+                .and_then(|s| s.reader.take())
+                .ok_or_else(|| AppError::Process(format!("Process {pid} not found or reader busy")))?
+        };
+
+        // Step 2 – read WITHOUT holding the global lock
+        let mut buf = [0u8; 4096];
+        let result = match reader.read(&mut buf) {
+            Ok(0) => {
+                debug!("PTY pid={pid}: EOF (process exited)");
+                Ok(None)
             }
-        } else {
-            Err(AppError::Process(format!("Process {pid} not found")))
+            Ok(n) => {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                debug!("PTY pid={pid}: read {n} bytes");
+                Ok(Some(text))
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                trace!("PTY pid={pid}: no data available (WouldBlock)");
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("PTY pid={pid}: read error: {e}");
+                Err(AppError::Process(format!("Failed to read PTY: {e}")))
+            }
+        };
+
+        // Step 3 – put the reader back (briefly hold the lock)
+        {
+            let mut sessions = SESSIONS
+                .lock()
+                .map_err(|e| AppError::Process(e.to_string()))?;
+            if let Some(session) = sessions.get_mut(&pid) {
+                session.reader = Some(reader);
+            }
         }
+
+        result
     }
 
     #[cfg(not(target_os = "macos"))]

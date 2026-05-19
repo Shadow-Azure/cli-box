@@ -197,26 +197,38 @@ async fn shutdown_handler() -> Json<serde_json::Value> {
 }
 
 async fn list_windows_handler() -> Result<Json<Vec<(u32, String)>>, AppError> {
-    let windows = ScreenCapture::list_windows()?;
+    let windows = tokio::task::spawn_blocking(ScreenCapture::list_windows)
+        .await
+        .map_err(|e| AppError::Process(format!("list_windows panicked: {e}")))??;
+    tracing::debug!("list_windows: {} windows", windows.len());
     Ok(Json(windows))
 }
 
 async fn list_processes_handler() -> Result<Json<Vec<crate::process::ProcessInfo>>, AppError> {
     let processes = ProcessManager::list_processes()?;
+    tracing::debug!("list_processes: {} running", processes.len());
     Ok(Json(processes))
 }
 
 async fn spawn_app_handler(
     Json(req): Json<SpawnAppRequest>,
 ) -> Result<Json<crate::process::ProcessInfo>, AppError> {
-    let info = ProcessManager::spawn_app(&req.path)?;
+    let path = req.path.clone();
+    let info = tokio::task::spawn_blocking(move || ProcessManager::spawn_app(&req.path))
+        .await
+        .map_err(|e| AppError::Process(format!("spawn_app panicked: {e}")))??;
+    tracing::info!("spawned app: {path}");
     Ok(Json(info))
 }
 
 async fn spawn_cli_handler(
     Json(req): Json<SpawnCliRequest>,
 ) -> Result<Json<crate::process::ProcessInfo>, AppError> {
-    let info = ProcessManager::spawn_cli(&req.command, &req.args)?;
+    let cmd = req.command.clone();
+    let info = tokio::task::spawn_blocking(move || ProcessManager::spawn_cli(&req.command, &req.args))
+        .await
+        .map_err(|e| AppError::Process(format!("spawn_cli panicked: {e}")))??;
+    tracing::info!("spawned cli: {cmd}");
     Ok(Json(info))
 }
 
@@ -319,7 +331,9 @@ async fn pty_write_handler(
 }
 
 async fn pty_output_handler(Path(pid): Path<u32>) -> Result<Json<serde_json::Value>, AppError> {
-    let output = ProcessManager::read_output(pid)?;
+    let output = tokio::task::spawn_blocking(move || ProcessManager::read_output(pid))
+        .await
+        .map_err(|e| AppError::Process(format!("pty_output panicked: {e}")))??;
     Ok(Json(serde_json::json!({"output": output})))
 }
 
