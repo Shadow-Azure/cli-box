@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import SandboxTerminal from "./components/Terminal";
 import StatusBar from "./components/StatusBar";
@@ -20,11 +20,39 @@ function App() {
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [activePid, setActivePid] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const hasConnectedRef = useRef(false);
 
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 4000);
   }, []);
+
+  // ── Auto-connect to spawned processes ──────────────────
+  // Polls for running processes and auto-connects to the first PTY
+  useEffect(() => {
+    const pollProcesses = async () => {
+      try {
+        const list = await api.listProcesses();
+        if (list.length > 0) {
+          setProcesses(list.map((p) => ({ pid: p.pid, name: p.name, is_running: p.is_running })));
+          // Auto-connect to the first running process
+          if (activePid === null && !hasConnectedRef.current) {
+            const running = list.find((p) => p.is_running);
+            if (running) {
+              setActivePid(running.pid);
+              hasConnectedRef.current = true;
+            }
+          }
+        }
+      } catch {
+        // Server may not be ready yet
+      }
+    };
+
+    pollProcesses();
+    const interval = setInterval(pollProcesses, 1000);
+    return () => clearInterval(interval);
+  }, [activePid]);
 
   // ── Terminal input → PTY ─────────────────────────────
 

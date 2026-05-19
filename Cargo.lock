@@ -3683,6 +3683,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "uuid",
 ]
@@ -4319,6 +4320,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

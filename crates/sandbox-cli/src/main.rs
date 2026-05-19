@@ -76,39 +76,75 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Open Terminal.app and run the given command.
+/// Launch the Tauri sandbox app with the given CLI command inside it.
+///
+/// The sandbox app embeds an xterm.js terminal where the command runs.
 fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
+    let bundle_path = find_tauri_bundle()?;
+    let app_binary = bundle_path.join("Contents/MacOS/system-test-sandbox");
+
+    // Build Tauri args: --mode=cli --cmd=<command> [-- <extra args>]
+    let mut tauri_args = vec![
+        "--mode=cli".to_string(),
+        format!("--cmd={}", command),
+    ];
+    if !args.is_empty() {
+        tauri_args.push("--".to_string());
+        tauri_args.extend(args.iter().cloned());
+    }
+
+    // Run the binary directly (not via open -a) so arguments are passed correctly
+    Command::new(&app_binary)
+        .args(&tauri_args)
+        .spawn()
+        .context("Failed to launch Tauri sandbox app")?;
+
     let full_cmd = if args.is_empty() {
         command.to_string()
     } else {
         format!("{} {}", command, args.join(" "))
     };
-
-    // Escape double quotes for AppleScript
-    let escaped = full_cmd.replace('\\', "\\\\").replace('"', "\\\"");
-
-    let script = format!(
-        r#"tell application "Terminal"
-    activate
-    do script "{}"
-end tell"#,
-        escaped
-    );
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to run osascript — is Terminal.app available?")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to launch Terminal: {}", stderr.trim());
-    }
-
     println!("Sandbox started: {}", full_cmd);
     println!("Use 'sandbox screenshot' to capture the sandbox window");
     Ok(())
+}
+
+/// Find the Tauri app bundle path.
+///
+/// Search order:
+/// 1. <exe_dir>/bundle/macos/System Test Sandbox.app  (cargo tauri build output)
+/// 2. <exe_dir>/../target/release/bundle/macos/...     (release build layout)
+fn find_tauri_bundle() -> anyhow::Result<PathBuf> {
+    let app_name = "System Test Sandbox.app";
+    let exe_path = std::env::current_exe().context("Failed to get current exe path")?;
+    let exe_dir = exe_path.parent().context("No parent dir for exe")?;
+
+    // Try 1: relative to exe (cargo tauri build layout)
+    let path1 = exe_dir.join("bundle/macos").join(app_name);
+    if path1.exists() {
+        return Ok(path1);
+    }
+
+    // Try 2: project root layout (exe is in <root>/release/, bundle is in <root>/target/release/bundle/macos/)
+    if let Some(project_root) = exe_dir.parent() {
+        let path2 = project_root
+            .join("target/release/bundle/macos")
+            .join(app_name);
+        if path2.exists() {
+            return Ok(path2);
+        }
+    }
+
+    anyhow::bail!(
+        "Tauri sandbox app not found.\n\
+         Searched:\n  {}\n  {}\n\
+         Build it first with: cargo tauri build",
+        path1.display(),
+        exe_dir
+            .join("../target/release/bundle/macos")
+            .join(app_name)
+            .display()
+    )
 }
 
 /// Take a screenshot of the sandbox window.
@@ -146,9 +182,13 @@ fn cmd_windows() -> anyhow::Result<()> {
     println!("{:<12}  Title", "Window ID");
     println!("{}", "-".repeat(80));
     for (id, title) in &windows {
-        // Truncate long titles
+        // Truncate long titles, respecting UTF-8 character boundaries
         let title_display = if title.len() > 64 {
-            format!("{}...", &title[..61])
+            let mut end = 61;
+            while end > 0 && !title.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &title[..end])
         } else {
             title.clone()
         };
@@ -158,39 +198,72 @@ fn cmd_windows() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Close the sandbox Terminal window.
+/// Close the sandbox window (Tauri app or Terminal.app).
 fn cmd_shutdown() -> anyhow::Result<()> {
-    let script = r#"tell application "Terminal"
+    // Try closing the Tauri sandbox app window first
+    let windows = ScreenCapture::list_windows()
+        .context("Failed to list windows. Is Screen Recording permission granted?")?;
+
+    let tauri_window = windows.iter().find(|(_, title)| {
+        title.starts_with("System Test Sandbox")
+    });
+
+    if let Some((id, title)) = tauri_window {
+        // Close the Tauri app window — this also terminates the process
+        println!("Closing sandbox window: {} (ID: {})", title, id);
+        // Use osascript to close the window via its process
+        let script = format!(
+            r#"tell application "System Events"
+    set procList to every process whose name is "system-test-sandbox"
+    repeat with proc in procList
+        set winList to every window of proc
+        repeat with win in winList
+            close win
+        end repeat
+    end repeat
+end tell"#
+        );
+        let _ = Command::new("osascript").arg("-e").arg(&script).output();
+    } else {
+        // Fallback: close Terminal.app first window
+        let script = r#"tell application "Terminal"
     close first window
 end tell"#;
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .context("Failed to run osascript")?;
-
-    if !output.status.success() {
-        // Terminal may already be closed — not an error
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!("osascript warning: {}", stderr.trim());
+        let _ = Command::new("osascript").arg("-e").arg(script).output();
     }
 
     println!("Sandbox shutdown complete.");
     Ok(())
 }
 
-/// Auto-discover the sandbox Terminal window.
+/// Auto-discover the sandbox window.
 ///
-/// Searches for a window whose title contains "Terminal" or "sandbox" (case-insensitive).
+/// Priority order:
+/// 1. Tauri sandbox app window (title = "System Test Sandbox")
+/// 2. Terminal.app window (title pattern: "user — command — W×H")
+/// 3. Any window containing the command name (e.g., "claude")
 fn discover_sandbox_window() -> anyhow::Result<u32> {
     let windows = ScreenCapture::list_windows()
         .context("Failed to list windows. Is Screen Recording permission granted?")?;
 
-    // Try finding a Terminal window first
+    // Priority 1: Tauri sandbox app window
+    // Titles may be "System Test Sandbox" or "System Test Sandbox [claude]"
     for (id, title) in &windows {
-        let lower = title.to_lowercase();
-        if lower.contains("terminal") || lower.contains("sandbox") {
+        if title.starts_with("System Test Sandbox") {
+            return Ok(*id);
+        }
+    }
+
+    // Priority 2: Terminal.app windows have titles like "user — command — 120×30"
+    for (id, title) in &windows {
+        if is_terminal_title(title) {
+            return Ok(*id);
+        }
+    }
+
+    // Priority 3: Fallback — match any window containing "claude"
+    for (id, title) in &windows {
+        if title.to_lowercase().contains("claude") {
             return Ok(*id);
         }
     }
@@ -199,4 +272,25 @@ fn discover_sandbox_window() -> anyhow::Result<u32> {
         "No sandbox window found automatically.\n\
          Use 'sandbox windows' to list all windows, then 'sandbox screenshot --window-id <ID>'."
     )
+}
+
+/// Returns true if the title matches the Terminal.app window title pattern.
+///
+/// Terminal.app titles look like: "username — command — 120×30"
+/// The trailing dimension suffix " — W×H" is the reliable marker.
+fn is_terminal_title(title: &str) -> bool {
+    // Find the last " — " separator (space + em dash + space, 5 bytes in UTF-8)
+    let sep = " — ";
+    let last_sep = match title.rfind(sep) {
+        Some(pos) => pos + sep.len(),
+        None => return false,
+    };
+
+    let suffix = &title[last_sep..];
+    // suffix should be "W×H" like "120×30"
+    let parts: Vec<&str> = suffix.split('×').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    parts[0].trim().parse::<u32>().is_ok() && parts[1].trim().parse::<u32>().is_ok()
 }

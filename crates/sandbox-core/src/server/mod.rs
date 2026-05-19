@@ -13,6 +13,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
+use tower_http::cors::{Any, CorsLayer};
 use tokio::sync::Mutex;
 
 /// Shared application state for the HTTP server
@@ -133,6 +134,11 @@ struct UiValueQuery {
 
 /// Build the HTTP API router
 pub fn build_router(state: Arc<Mutex<AppState>>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/sandbox/info", get(sandbox_info_handler))
@@ -154,6 +160,7 @@ pub fn build_router(state: Arc<Mutex<AppState>>) -> Router {
         .route("/ui/inspect/{window_id}", get(ui_inspect_handler))
         .route("/ui/find", post(ui_find_handler))
         .route("/ui/value", get(ui_value_handler))
+        .layer(cors)
         .with_state(state)
 }
 
