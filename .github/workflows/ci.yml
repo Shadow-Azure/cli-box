@@ -1,15 +1,11 @@
 # system-test-sandbox - CI门禁
 # 在PR创建/更新及push到main时触发
 #
-# 门禁检查项 (Rust + TypeScript):
+# 门禁检查项 (Rust):
 # 1. Rust 格式化检查 - cargo fmt
 # 2. Rust Clippy - 代码规范 + 编译检查 (macOS, 需要系统框架)
 # 3. Rust 单元测试 - cargo test (macOS)
-# 4. 前端构建 - pnpm build
-# 5. 前端 Lint - prettier
-# 6. 前端类型检查 - pnpm typecheck
-# 7. 前端单元测试 - vitest
-# 8. 安全检查 - 硬编码密钥检测 + 依赖漏洞扫描
+# 4. 安全检查 - 硬编码密钥检测 + 依赖漏洞扫描
 #
 # @see CLAUDE.md 七、核心工作流程
 
@@ -32,9 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
-  PNPM_VERSION: '9'
-  RUST_VERSION: '1.88'
+  RUST_VERSION: '1.91'
 
 jobs:
   # ==================== Rust 格式化检查 ====================
@@ -113,18 +107,15 @@ jobs:
       - name: 运行 cargo test
         run: cargo test -p sandbox-core
 
-      - name: 安装 cargo-tarpaulin
-        continue-on-error: true
+      - name: 安装 cargo-llvm-cov
         run: |
-          if ! command -v cargo-tarpaulin &> /dev/null; then
-            cargo install cargo-tarpaulin --locked
-          fi
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
 
       - name: 运行测试覆盖率
-        if: success()
-        continue-on-error: true
         run: |
-          cargo tarpaulin -p sandbox-core -p sandbox-cli --out Xml --out Html --output-dir coverage --skip-clean
+          mkdir -p coverage
+          cargo llvm-cov -p sandbox-core --cobertura --output-path coverage/cobertura.xml
 
       - name: 生成覆盖率摘要
         if: always()
@@ -157,6 +148,9 @@ jobs:
             echo "> 详细报告见 Rust 覆盖率 artifact" >> "$SUMMARY_FILE"
           else
             echo "> ⚠️ 未生成覆盖率报告" >> "$SUMMARY_FILE"
+            echo "❌ 覆盖率生成失败：cobertura.xml 未生成" >> "$SUMMARY_FILE"
+            echo "::error::覆盖率报告生成失败，检查 llvm-cov 输出的测试失败信息"
+            exit 1
           fi
           echo "" >> "$SUMMARY_FILE"
           cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
@@ -177,158 +171,6 @@ jobs:
           path: coverage/
           retention-days: 14
 
-  # ==================== 前端构建 ====================
-  frontend-build:
-    name: 前端构建
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: 设置依赖缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            sandbox-web/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('sandbox-web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: 安装依赖
-        working-directory: sandbox-web
-        run: pnpm install --frozen-lockfile
-
-      - name: 构建
-        working-directory: sandbox-web
-        run: pnpm build
-
-  # ==================== 前端 Lint 检查 ====================
-  frontend-lint:
-    name: 前端 Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: 设置依赖缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            sandbox-web/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('sandbox-web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: 安装依赖
-        working-directory: sandbox-web
-        run: pnpm install --frozen-lockfile
-
-      - name: 运行格式检查
-        working-directory: sandbox-web
-        run: pnpm format:check
-
-  # ==================== 前端类型检查 ====================
-  frontend-typecheck:
-    name: 前端类型检查
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: 设置依赖缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            sandbox-web/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('sandbox-web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: 安装依赖
-        working-directory: sandbox-web
-        run: pnpm install --frozen-lockfile
-
-      - name: TypeScript 类型检查
-        working-directory: sandbox-web
-        run: pnpm typecheck
-
-  # ==================== 前端单元测试 ====================
-  frontend-test:
-    name: 前端单元测试
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置 Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
-      - name: 设置依赖缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            sandbox-web/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('sandbox-web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: 安装依赖
-        working-directory: sandbox-web
-        run: pnpm install --frozen-lockfile
-
-      - name: 运行单元测试
-        working-directory: sandbox-web
-        run: pnpm test:unit
-
   # ==================== 安全检查 ====================
   security:
     name: 安全检查
@@ -347,11 +189,6 @@ jobs:
       - name: 安装系统依赖
         run: sudo apt-get update && sudo apt-get install -y cmake clang
 
-      - name: 设置 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
       - name: Rust 依赖审计
         if: always()
         continue-on-error: false
@@ -361,15 +198,6 @@ jobs:
             cargo audit || echo "::warning::Rust 依赖存在漏洞"
           else
             echo "::notice::未找到 Cargo.lock，跳过 Rust 依赖审计"
-          fi
-
-      - name: 前端依赖审计
-        working-directory: sandbox-web
-        run: |
-          if [ -f pnpm-lock.yaml ]; then
-            pnpm audit --audit-level=high || echo "::warning::前端依赖存在高危漏洞"
-          else
-            echo "::notice::未找到 pnpm-lock.yaml，跳过前端依赖审计"
           fi
 
       - name: 检查硬编码密钥
@@ -411,7 +239,7 @@ jobs:
   gate-result:
     name: 门禁结果
     runs-on: ubuntu-latest
-    needs: [rust-fmt, rust-clippy, rust-test, frontend-build, frontend-lint, frontend-typecheck, frontend-test, security]
+    needs: [rust-fmt, rust-clippy, rust-test, security]
     if: always()
 
     steps:
@@ -423,14 +251,6 @@ jobs:
           path: coverage-artifacts
         continue-on-error: true
 
-      - name: 下载前端覆盖率摘要
-        uses: actions/download-artifact@v4
-        if: always()
-        with:
-          name: frontend-coverage-summary
-          path: coverage-artifacts
-        continue-on-error: true
-
       - name: 检查门禁结果
         run: |
           echo "============================================"
@@ -438,13 +258,9 @@ jobs:
           echo "============================================"
           echo ""
 
-          BUILD_RESULT="${{ needs.frontend-build.result }}"
           RUST_FMT="${{ needs.rust-fmt.result }}"
           RUST_CLIPPY="${{ needs.rust-clippy.result }}"
           RUST_TEST="${{ needs.rust-test.result }}"
-          LINT_RESULT="${{ needs.frontend-lint.result }}"
-          TYPECHECK_RESULT="${{ needs.frontend-typecheck.result }}"
-          TEST_RESULT="${{ needs.frontend-test.result }}"
           SECURITY_RESULT="${{ needs.security.result }}"
 
           echo "| 检查项 | 状态 |"
@@ -452,10 +268,6 @@ jobs:
           echo "| Rust 格式化 | $RUST_FMT |"
           echo "| Rust Clippy | $RUST_CLIPPY |"
           echo "| Rust 测试 | $RUST_TEST |"
-          echo "| 前端构建 | $BUILD_RESULT |"
-          echo "| 前端 Lint | $LINT_RESULT |"
-          echo "| 前端类型检查 | $TYPECHECK_RESULT |"
-          echo "| 前端测试 | $TEST_RESULT |"
           echo "| 安全检查 | $SECURITY_RESULT |"
           echo ""
 
@@ -464,18 +276,10 @@ jobs:
             cat coverage-artifacts/rust-coverage-summary.md
             echo ""
           fi
-          if [ -f coverage-artifacts/frontend-coverage-summary.md ]; then
-            cat coverage-artifacts/frontend-coverage-summary.md
-            echo ""
-          fi
 
-          if [[ "$BUILD_RESULT" == "success" && \
-                "$RUST_FMT" == "success" && \
+          if [[ "$RUST_FMT" == "success" && \
                 "$RUST_CLIPPY" == "success" && \
                 "$RUST_TEST" == "success" && \
-                "$LINT_RESULT" == "success" && \
-                "$TYPECHECK_RESULT" == "success" && \
-                "$TEST_RESULT" == "success" && \
                 "$SECURITY_RESULT" == "success" ]]; then
             echo "✅ 所有门禁检查通过！"
             exit 0
@@ -495,10 +299,6 @@ jobs:
               'Rust 格式化': '${{ needs.rust-fmt.result }}',
               'Rust Clippy': '${{ needs.rust-clippy.result }}',
               'Rust 测试': '${{ needs.rust-test.result }}',
-              '前端构建': '${{ needs.frontend-build.result }}',
-              '前端 Lint': '${{ needs.frontend-lint.result }}',
-              '前端类型检查': '${{ needs.frontend-typecheck.result }}',
-              '前端测试': '${{ needs.frontend-test.result }}',
               '安全检查': '${{ needs.security.result }}',
             };
 
@@ -514,10 +314,6 @@ jobs:
             try {
               const rustCov = fs.readFileSync('coverage-artifacts/rust-coverage-summary.md', 'utf8');
               coverageSection += '\n' + rustCov + '\n';
-            } catch (e) {}
-            try {
-              const feCov = fs.readFileSync('coverage-artifacts/frontend-coverage-summary.md', 'utf8');
-              coverageSection += '\n' + feCov + '\n';
             } catch (e) {}
 
             const body = `## 🔒 门禁检查结果
@@ -570,16 +366,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-
       - name: 安装 Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -590,36 +376,13 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: 设置前端依赖缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            sandbox-web/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('sandbox-web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: 安装前端依赖
-        working-directory: sandbox-web
-        run: pnpm install --frozen-lockfile
-
       - name: 构建 CLI 二进制 (release)
         run: cargo build -p sandbox-cli --release
-
-      - name: 构建前端 + Tauri 桌面应用
-        run: |
-          if ! cargo tauri --version &>/dev/null; then
-            cargo install tauri-cli --version "^2" --locked
-          fi
-          cargo tauri build
 
       - name: 整理构建产物
         run: |
           mkdir -p release
           cp target/release/sandbox release/
-          find target/release/bundle/macos -name "*.app" -maxdepth 1 -exec cp -R {} release/ \; 2>/dev/null || true
-          find target/release/bundle/dmg -name "*.dmg" -maxdepth 1 -exec cp {} release/ \; 2>/dev/null || true
           echo "## 构建产物" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           ls -lh release/ | tail -n +2 | awk '{printf "| %s | %s |\n", $NF, $5}' >> "$GITHUB_STEP_SUMMARY"
