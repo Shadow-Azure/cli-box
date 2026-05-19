@@ -225,9 +225,10 @@ async fn spawn_cli_handler(
     Json(req): Json<SpawnCliRequest>,
 ) -> Result<Json<crate::process::ProcessInfo>, AppError> {
     let cmd = req.command.clone();
-    let info = tokio::task::spawn_blocking(move || ProcessManager::spawn_cli(&req.command, &req.args))
-        .await
-        .map_err(|e| AppError::Process(format!("spawn_cli panicked: {e}")))??;
+    let info =
+        tokio::task::spawn_blocking(move || ProcessManager::spawn_cli(&req.command, &req.args))
+            .await
+            .map_err(|e| AppError::Process(format!("spawn_cli panicked: {e}")))??;
     tracing::info!("spawned cli: {cmd}");
     Ok(Json(info))
 }

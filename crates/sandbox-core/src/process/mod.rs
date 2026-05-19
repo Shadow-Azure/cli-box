@@ -100,9 +100,7 @@ impl ProcessManager {
 
         info!(
             "Launched app: {} (tracked_id={}, window_id={:?})",
-            app_path,
-            id,
-            window_id
+            app_path, id, window_id
         );
 
         Ok((info, window_id))
@@ -166,9 +164,7 @@ impl ProcessManager {
 
         info!(
             "Spawned CLI: {} (tracked_id={}, os_pid={:?})",
-            command,
-            tracked_id,
-            child_pid
+            command, tracked_id, child_pid
         );
 
         Ok(ProcessInfo {
@@ -285,7 +281,9 @@ impl ProcessManager {
             sessions
                 .get_mut(&pid)
                 .and_then(|s| s.reader.take())
-                .ok_or_else(|| AppError::Process(format!("Process {pid} not found or reader busy")))?
+                .ok_or_else(|| {
+                    AppError::Process(format!("Process {pid} not found or reader busy"))
+                })?
         };
 
         // Step 2 – read WITHOUT holding the global lock
