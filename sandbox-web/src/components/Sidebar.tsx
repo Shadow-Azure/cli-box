@@ -1,10 +1,10 @@
 import { useTheme } from "../themes/ThemeContext";
 
 interface SidebarProps {
-  sandboxName: string;
+  command: string;
 }
 
-export default function Sidebar({ sandboxName }: SidebarProps) {
+export default function Sidebar({ command }: SidebarProps) {
   const { toggleTheme, theme } = useTheme();
   const isDark = theme.kind === "dark";
 
@@ -60,7 +60,7 @@ export default function Sidebar({ sandboxName }: SidebarProps) {
         >
           Instances
         </div>
-        <InstanceItem name={sandboxName} icon={<TerminalIcon />} selected />
+        <InstanceItem name={command} icon={<TerminalIcon />} selected />
       </div>
 
       {/* Spacer */}

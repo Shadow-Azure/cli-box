@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
 import SandboxTerminal from "./Terminal";
-import type { ProcessInfo } from "../api";
 
 interface DashboardProps {
   sandboxName: string;
@@ -8,7 +7,6 @@ interface DashboardProps {
   activePid: number | null;
   onTerminalInput: (data: string) => void;
   onScreenshot: () => void;
-  processes: ProcessInfo[];
   children?: ReactNode;
 }
 
@@ -18,7 +16,6 @@ export default function Dashboard({
   activePid,
   onTerminalInput,
   onScreenshot,
-  processes,
   children,
 }: DashboardProps) {
   return (
@@ -77,15 +74,15 @@ export default function Dashboard({
       </div>
 
       {/* Content */}
-      <div className="flex-1 relative overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 relative flex flex-col overflow-hidden">
         {/* Sandbox card */}
         <div
-          className="rounded-xl overflow-hidden border"
+          className="flex-1 flex flex-col m-4 rounded-xl overflow-hidden border"
           style={{ borderColor: "var(--sandbox-border)" }}
         >
           {/* Card header */}
           <div
-            className="flex items-center justify-between px-4 py-2.5"
+            className="flex items-center justify-between px-4 py-2.5 shrink-0"
             style={{ backgroundColor: "var(--sandbox-bg-secondary)" }}
           >
             <div className="flex items-center gap-2">
@@ -105,32 +102,9 @@ export default function Dashboard({
             <ResourceStats connected={connected} />
           </div>
 
-          {/* Terminal */}
-          <div className="h-[320px]">
+          {/* Terminal — fills remaining space */}
+          <div className="flex-1 min-h-0">
             <SandboxTerminal onInput={onTerminalInput} activePid={activePid} />
-          </div>
-        </div>
-
-        {/* Instances list */}
-        <div>
-          <h2
-            className="text-sm font-semibold mb-3"
-            style={{ color: "var(--sandbox-fg-primary)" }}
-          >
-            Instances
-          </h2>
-          <div className="space-y-1">
-            {processes.map((p) => (
-              <InstanceRow key={p.pid} process={p} />
-            ))}
-            {processes.length === 0 && (
-              <div
-                className="text-xs py-3 px-3 rounded-lg"
-                style={{ color: "var(--sandbox-fg-tertiary)" }}
-              >
-                No running instances
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -164,49 +138,6 @@ function Stat({ label, value }: { label: string; value: string }) {
         {value}
       </div>
       <div>{label}</div>
-    </div>
-  );
-}
-
-function InstanceRow({ process }: { process: ProcessInfo }) {
-  const isRunning = process.is_running;
-  return (
-    <div
-      className="flex items-center justify-between px-3 py-2 rounded-lg border text-sm"
-      style={{
-        backgroundColor: "var(--sandbox-bg-secondary)",
-        borderColor: "var(--sandbox-border)",
-      }}
-    >
-      <div className="flex items-center gap-2.5">
-        <span
-          className="text-xs"
-          style={{ color: "var(--sandbox-fg-tertiary)" }}
-        >
-          {">_"}
-        </span>
-        <span style={{ color: "var(--sandbox-fg-primary)" }}>
-          {process.name}
-        </span>
-      </div>
-      <div className="flex items-center gap-2 text-xs">
-        <span
-          className="font-medium"
-          style={{
-            color: isRunning
-              ? "var(--sandbox-success)"
-              : "var(--sandbox-fg-tertiary)",
-          }}
-        >
-          {isRunning ? "Running" : "Stopped"}
-        </span>
-        {isRunning && (
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{ backgroundColor: "var(--sandbox-success)" }}
-          />
-        )}
-      </div>
     </div>
   );
 }

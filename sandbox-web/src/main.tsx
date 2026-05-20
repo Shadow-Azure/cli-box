@@ -1,20 +1,21 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import ReactDOM from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import DetailPanel from "./components/DetailPanel";
 import { ThemeProvider } from "./themes/ThemeContext";
 import * as api from "./api";
-import type { ProcessInfo, HealthResponse } from "./api";
+import type { HealthResponse } from "./api";
 import "./index.css";
 
 function App() {
   const [activePid, setActivePid] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
-  const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [command, setCommand] = useState("Sandbox");
   const hasConnectedRef = useRef(false);
 
   // Auto-connect to spawned processes
@@ -22,7 +23,6 @@ function App() {
     const pollProcesses = async () => {
       try {
         const list = await api.listProcesses();
-        setProcesses(list);
         if (list.length > 0) {
           setConnected(true);
           if (activePid === null && !hasConnectedRef.current) {
@@ -61,6 +61,25 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch command from Tauri sandbox config
+  useEffect(() => {
+    invoke<{
+      command?: string;
+      mode?: string;
+      args?: string[];
+    }>("get_sandbox_config")
+      .then((config) => {
+        if (config.command) {
+          const args =
+            config.args && config.args.length > 0
+              ? " " + config.args.join(" ")
+              : "";
+          setCommand(config.command + args);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Terminal input -> PTY
   const handleTerminalInput = useCallback(
     (data: string) => {
@@ -94,14 +113,13 @@ function App() {
 
   return (
     <div className="three-panel">
-      <Sidebar sandboxName={sandboxName} />
+      <Sidebar command={command} />
       <Dashboard
         sandboxName={sandboxName}
         connected={connected}
         activePid={activePid}
         onTerminalInput={handleTerminalInput}
         onScreenshot={handleScreenshot}
-        processes={processes}
       >
         {/* Screenshot preview floating panel */}
         {showPreview && screenshotUrl && (
