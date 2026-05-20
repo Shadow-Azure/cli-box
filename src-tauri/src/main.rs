@@ -95,12 +95,10 @@ fn main() {
     let launch_args = parse_sandbox_args();
 
     // Auto-generate sandbox_id and port if not provided
-    let sandbox_id = launch_args.sandbox_id.clone().or_else(|| {
-        Some(format!(
-            "{}",
-            uuid::Uuid::new_v4().to_string()[..8].to_string()
-        ))
-    });
+    let sandbox_id = launch_args
+        .sandbox_id
+        .clone()
+        .or_else(|| Some(uuid::Uuid::new_v4().to_string()[..8].to_string()));
     let sandbox_port = launch_args.sandbox_port.or(Some(5801));
 
     let config = SandboxConfig {

@@ -78,9 +78,16 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-sandbox-bg-primary text-sandbox-fg-primary">
-      {/* Header bar — bridges native title bar and terminal */}
+      {/* Window drag region — sits above header, full width for traffic lights */}
+      <div
+        className="h-7 w-full shrink-0"
+        data-tauri-drag-region
+        style={{ backgroundColor: "var(--sandbox-titlebar-bg)" }}
+      />
+
+      {/* Header bar — below traffic lights */}
       <header
-        className="h-8 flex items-center justify-between px-3 select-none shrink-0 border-b"
+        className="h-8 flex items-center justify-between pl-20 pr-3 select-none shrink-0 border-b"
         style={{
           backgroundColor: "var(--sandbox-titlebar-bg)",
           borderColor: "var(--sandbox-border)",

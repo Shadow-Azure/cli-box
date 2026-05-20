@@ -17,12 +17,14 @@
         "width": 1280,
         "height": 800,
         "resizable": true,
-        "transparent": false
+        "transparent": true,
+        "decorations": false
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
