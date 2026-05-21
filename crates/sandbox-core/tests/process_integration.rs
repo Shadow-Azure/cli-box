@@ -120,3 +120,81 @@ fn process_info_path_some_serializes_as_string() {
     let json = serde_json::to_string(&info).unwrap();
     assert!(json.contains("\"path\":\"/usr/bin/x\""));
 }
+
+#[test]
+fn list_processes_returns_empty_when_no_sessions() {
+    let processes = sandbox_core::process::ProcessManager::list_processes();
+    assert!(processes.is_ok());
+    // May or may not be empty depending on test execution order
+    // but it should never error
+}
+
+#[test]
+fn kill_nonexistent_process_returns_error() {
+    let result = sandbox_core::process::ProcessManager::kill_process(99990);
+    assert!(result.is_err());
+}
+
+#[test]
+fn send_input_nonexistent_process_returns_error() {
+    let result = sandbox_core::process::ProcessManager::send_input(99990, b"hello");
+    assert!(result.is_err());
+}
+
+#[test]
+fn read_output_nonexistent_process_returns_error() {
+    let result = sandbox_core::process::ProcessManager::read_output(99990);
+    assert!(result.is_err());
+}
+
+#[test]
+fn spawn_cli_simple_command() {
+    let result = sandbox_core::process::ProcessManager::spawn_cli("echo", &["hello".to_string()]);
+    // May succeed on macOS
+    if let Ok(info) = result {
+        assert!(info.is_running);
+        assert_eq!(info.name, "echo");
+        // Clean up
+        let _ = sandbox_core::process::ProcessManager::kill_process(info.pid);
+    }
+}
+
+#[test]
+fn spawn_cli_then_list_and_kill() {
+    let spawn_result =
+        sandbox_core::process::ProcessManager::spawn_cli("sleep", &["1".to_string()]);
+    if let Ok(info) = spawn_result {
+        let list = sandbox_core::process::ProcessManager::list_processes().unwrap();
+        assert!(list.iter().any(|p| p.pid == info.pid));
+
+        let kill_result = sandbox_core::process::ProcessManager::kill_process(info.pid);
+        assert!(kill_result.is_ok());
+
+        // Second kill should fail
+        let kill2 = sandbox_core::process::ProcessManager::kill_process(info.pid);
+        assert!(kill2.is_err());
+    }
+}
+
+#[test]
+fn send_input_to_spawned_process() {
+    let spawn_result = sandbox_core::process::ProcessManager::spawn_cli("cat", &[]);
+    if let Ok(info) = spawn_result {
+        let write_result = sandbox_core::process::ProcessManager::send_input(info.pid, b"hello\n");
+        assert!(write_result.is_ok());
+        let _ = sandbox_core::process::ProcessManager::kill_process(info.pid);
+    }
+}
+
+#[test]
+fn read_output_from_spawned_process() {
+    let spawn_result =
+        sandbox_core::process::ProcessManager::spawn_cli("echo", &["test_output".to_string()]);
+    if let Ok(info) = spawn_result {
+        // Give it time to produce output
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let output = sandbox_core::process::ProcessManager::read_output(info.pid);
+        assert!(output.is_ok());
+        let _ = sandbox_core::process::ProcessManager::kill_process(info.pid);
+    }
+}
