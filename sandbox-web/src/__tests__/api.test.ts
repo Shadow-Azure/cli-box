@@ -149,6 +149,13 @@ describe("API client", () => {
       );
       await expect(api.takeScreenshot()).rejects.toThrow("Screenshot failed");
     });
+
+    it("throws when sandbox window is not available (400)", async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockResponse(false, 400, "Sandbox window not available"),
+      );
+      await expect(api.takeScreenshot()).rejects.toThrow("Screenshot failed");
+    });
   });
 
   describe("takeScreenshotRegion()", () => {

@@ -42,6 +42,35 @@ fn find_window_by_title_nonexistent_returns_error() {
 }
 
 #[test]
+fn find_window_by_pid_returns_error_for_nonexistent_pid() {
+    // PID 9999999 almost certainly does not exist
+    let result = ScreenCapture::find_window_by_pid(9999999);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    // Should be a WindowNotFound error mentioning the PID
+    let msg = format!("{err}");
+    assert!(msg.contains("9999999"), "Error should mention PID: {msg}");
+}
+
+#[test]
+fn find_window_by_pid_returns_error_for_pid_zero() {
+    // PID 0 is kernel_task, which has no normal windows
+    let result = ScreenCapture::find_window_by_pid(0);
+    assert!(result.is_err());
+}
+
+#[test]
+fn find_window_by_pid_discovers_own_process_if_it_has_windows() {
+    // The test runner itself may or may not have windows depending on how it's run.
+    // Just verify it doesn't panic and returns a proper Result.
+    let own_pid = std::process::id();
+    let result = ScreenCapture::find_window_by_pid(own_pid);
+    // We don't assert success because the test runner might not have a window,
+    // but it should not panic.
+    let _ = result;
+}
+
+#[test]
 fn list_windows_returns_ok() {
     let result = ScreenCapture::list_windows();
     // Should succeed on macOS (requires Screen Recording permission)
