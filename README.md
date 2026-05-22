@@ -71,16 +71,53 @@ sandbox-cli list
 # → abc123  "claude"           CLI   Running  15801  2026-05-16 10:30
 # → def456  "cc-switch"        APP   Running  15802  2026-05-16 10:31
 
-# 截取沙箱截图
-sandbox-cli screenshot abc123 -o sandbox.png
+# 查看沙箱详情
+sandbox-cli inspect abc123
 
-# 在沙箱内模拟操作
-sandbox-cli click abc123 100 200          # 鼠标点击
-sandbox-cli type abc123 "帮我写一个函数"    # 输入文本
-sandbox-cli key abc123 Return --modifiers cmd  # 按键
+# 截取沙箱截图
+sandbox-cli screenshot --id abc123 -o sandbox.png
+
+# 列出沙箱内进程
+sandbox-cli processes --id abc123
 
 # 关闭沙箱
 sandbox-cli close abc123
+```
+
+### 键盘与鼠标操作
+
+```bash
+# 输入文本（CGEvent 模式，适用于所有沙箱）
+sandbox-cli type --id abc123 "帮我写一个函数"
+
+# 输入文本（PTY 直写模式，更可靠，仅 CLI 沙箱）
+sandbox-cli type --id abc123 --pty "帮我写一个函数"
+
+# 按键（CGEvent 模式）
+sandbox-cli key --id abc123 Return
+sandbox-cli key --id abc123 Return --modifiers cmd
+
+# 按键（PTY 直写模式）
+sandbox-cli key --id abc123 --pty Return
+
+# 鼠标点击
+sandbox-cli click --id abc123 100 200
+sandbox-cli click --id abc123 100 200 --btn right
+```
+
+### 完整场景示例
+
+```bash
+# 场景一：在沙箱中与 Claude Code 交互
+sandbox-cli start claude
+# → 用 sandbox-cli list 获取 ID
+sandbox-cli type --id <id> --pty "你是谁？"
+sandbox-cli key --id <id> --pty Return
+
+# 场景二：在沙箱中执行 Shell 命令
+sandbox-cli start zsh
+sandbox-cli type --id <id> --pty 'echo "hello world"'
+sandbox-cli key --id <id> --pty Return
 ```
 
 ### Agent 调用示例
