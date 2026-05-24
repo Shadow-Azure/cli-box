@@ -145,7 +145,7 @@ export default function SandboxTerminal({
           pollRef.current = null;
         }
       }
-    }, 100);
+    }, 50);
 
     return () => {
       if (pollRef.current) {
