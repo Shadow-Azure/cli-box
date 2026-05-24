@@ -12,7 +12,7 @@
 ┌──────────────────────────────────────────────────────────────┐
 │                  Agent / 用户 (CLI / MCP / HTTP)              │
 │                                                              │
-│  sandbox-cli start --cli "claude"        → 返回 sandbox-id   │
+│  sandbox-cli start                       → 返回 sandbox-id   │
 │  sandbox-cli list                        → 列出所有实例       │
 │  sandbox-cli screenshot <id>             → 截取沙箱截图       │
 │  sandbox-cli click <id> 100 200          → 模拟点击           │
@@ -126,8 +126,9 @@ system-test-sandbox/
 
 ```bash
 # 多实例管理
-sandbox-cli start --cli "claude"              # 启动沙箱，运行 Claude Code，返回 sandbox-id
-sandbox-cli start --cli "echo" -- "hello"     # 带参数启动 CLI
+sandbox-cli start                             # 启动沙箱，打开 zsh 终端（默认）
+sandbox-cli start --cli "claude"              # 启动沙箱，直接运行 Claude Code
+sandbox-cli start --shell                     # 等同于 sandbox start（快捷方式）
 sandbox-cli start --app "/path/to/App.app"    # 启动沙箱，运行 macOS 应用
 sandbox-cli list                              # 列出所有活跃沙箱及其状态
 sandbox-cli close <sandbox-id>                # 关闭指定沙箱
@@ -308,15 +309,18 @@ fix(server): 修复 HTTP API 端口冲突
 ### 7.2 沙箱使用流程
 
 ```bash
-# 1. 启动沙箱（运行 Claude Code 终端）
-sandbox-cli start --cli "claude"
-# → 自动打开 "System Test Sandbox" 窗口，xterm.js 中运行 claude
-# → 输出: Sandbox started: abc123
+# 1. 启动沙箱（默认打开 zsh 终端）
+sandbox-cli start
+# → 自动打开沙箱窗口，xterm.js 中运行 zsh
+# → 可在终端中输入 claude、opencode 等命令
 
-# 2. 启动沙箱（运行 macOS 应用）
+# 2. 启动沙箱（直接运行指定命令）
+sandbox-cli start --cli "claude"
+# → 自动打开沙箱窗口，直接运行 claude
+
+# 3. 启动沙箱（运行 macOS 应用）
 sandbox-cli start --app "/Applications/cc-switch.app"
 # → 打开沙箱窗口，启动 cc-switch，关联其窗口
-# → 输出: Sandbox started: def456
 
 # 3. 查看所有沙箱
 sandbox-cli list
@@ -347,8 +351,8 @@ cargo fmt --all -- --check && cargo clippy --all-targets \
 cd sandbox-web && pnpm install && pnpm build && cd ..
 cargo build --release -p system-test-sandbox
 
-# 使用 CLI 启动沙箱
-cargo run -p sandbox-cli -- start --cli "claude"
+# 使用 CLI 启动沙箱（默认 zsh）
+cargo run -p sandbox-cli -- start
 
 # 通过 HTTP 直接调用 (已知端口)
 curl http://127.0.0.1:5801/screenshot -o screenshot.png
