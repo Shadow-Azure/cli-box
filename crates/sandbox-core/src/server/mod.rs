@@ -1233,6 +1233,21 @@ mod tests {
     }
 
     #[test]
+    fn spawn_cli_request_with_size() {
+        let req: SpawnCliRequest =
+            serde_json::from_str(r#"{"command": "zsh", "cols": 120, "rows": 40}"#).unwrap();
+        assert_eq!(req.cols, Some(120));
+        assert_eq!(req.rows, Some(40));
+    }
+
+    #[test]
+    fn spawn_cli_request_default_size() {
+        let req: SpawnCliRequest = serde_json::from_str(r#"{"command": "zsh"}"#).unwrap();
+        assert_eq!(req.cols, None);
+        assert_eq!(req.rows, None);
+    }
+
+    #[test]
     fn kill_request_deserialize() {
         let req: KillRequest = serde_json::from_str(r#"{"pid": 1234}"#).unwrap();
         assert_eq!(req.pid, 1234);

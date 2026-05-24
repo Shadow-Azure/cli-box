@@ -260,10 +260,8 @@ impl ProcessManager {
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn spawn_cli(_command: &str, _args: &[String]) -> Result<ProcessInfo> {
-        Err(AppError::Process(
-            "spawn_cli only supported on macOS".into(),
-        ))
+    pub fn spawn_cli(command: &str, args: &[String]) -> Result<ProcessInfo> {
+        Self::spawn_cli_with_size(command, args, 80, 24)
     }
 
     #[cfg(not(target_os = "macos"))]
