@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 use tracing::{debug, info, trace, warn};
 
 #[cfg(target_os = "macos")]
@@ -42,6 +43,8 @@ struct PtySession {
     stop_flag: Arc<AtomicBool>,
     /// Handle to the reader thread (for join on cleanup)
     reader_thread: Option<std::thread::JoinHandle<()>>,
+    /// Broadcast sender for streaming PTY output to WebSocket subscribers
+    output_tx: broadcast::Sender<String>,
 }
 
 /// Track active PTY sessions by sandbox-tracked PID
@@ -137,6 +140,16 @@ impl ProcessManager {
 
         let mut cmd = CommandBuilder::new(command);
         cmd.args(args);
+        // Ensure PTY child processes have proper terminal environment.
+        // TUI apps (opencode, vim, htop) check TERM to decide whether to render.
+        // When launched from a GUI app (Tauri), TERM may be missing.
+        cmd.env("TERM", "xterm-256color");
+        if std::env::var("COLORTERM").is_err() {
+            cmd.env("COLORTERM", "truecolor");
+        }
+        if std::env::var("LANG").is_err() {
+            cmd.env("LANG", "en_US.UTF-8");
+        }
         let child = pty_pair
             .slave
             .spawn_command(cmd)
@@ -161,6 +174,10 @@ impl ProcessManager {
         let buffer: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
+        // Create broadcast channel for streaming output to WebSocket subscribers
+        let (output_tx, _) = broadcast::channel::<String>(256);
+        let thread_tx = output_tx.clone();
+
         let thread_buffer = Arc::clone(&buffer);
         let thread_stop = Arc::clone(&stop_flag);
 
@@ -182,6 +199,8 @@ impl ProcessManager {
                         }
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&read_buf[..n]).to_string();
+                            // Broadcast to WebSocket subscribers
+                            let _ = thread_tx.send(text.clone());
                             if let Ok(mut buf) = thread_buffer.lock() {
                                 // Cap buffer at 1000 entries to prevent unbounded growth
                                 if buf.len() >= 1000 {
@@ -217,6 +236,7 @@ impl ProcessManager {
                 buffer,
                 stop_flag,
                 reader_thread: Some(reader_thread),
+                output_tx,
             },
         );
 
@@ -279,9 +299,8 @@ impl ProcessManager {
 
         // Step 3: Kill the actual OS child process
         if os_pid > 0 {
-            kill(Pid::from_raw(os_pid as i32), Signal::SIGTERM).map_err(|e| {
-                AppError::Process(format!("Failed to kill process {os_pid}: {e}"))
-            })?;
+            kill(Pid::from_raw(os_pid as i32), Signal::SIGTERM)
+                .map_err(|e| AppError::Process(format!("Failed to kill process {os_pid}: {e}")))?;
         }
 
         // Step 4: Join the reader thread.
@@ -425,6 +444,26 @@ impl ProcessManager {
     pub fn read_output(_pid: u32) -> Result<Option<String>> {
         Err(AppError::Process(
             "read_output only supported on macOS".into(),
+        ))
+    }
+
+    /// Subscribe to PTY output stream for WebSocket streaming.
+    /// Returns a broadcast::Receiver that receives output chunks in real-time.
+    #[cfg(target_os = "macos")]
+    pub fn subscribe_output(pid: u32) -> Result<broadcast::Receiver<String>> {
+        let sessions = SESSIONS
+            .lock()
+            .map_err(|e| AppError::Process(e.to_string()))?;
+        let session = sessions
+            .get(&pid)
+            .ok_or_else(|| AppError::Process(format!("Process {pid} not found")))?;
+        Ok(session.output_tx.subscribe())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn subscribe_output(_pid: u32) -> Result<broadcast::Receiver<String>> {
+        Err(AppError::Process(
+            "subscribe_output only supported on macOS".into(),
         ))
     }
 }
