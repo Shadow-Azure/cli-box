@@ -49,6 +49,7 @@ fn test_pty_reader_thread_basic() {
 }
 
 #[test]
+#[ignore] // Requires opencode binary in PATH — run locally only
 fn test_pty_reader_opencode() {
     let info = ProcessManager::spawn_cli("opencode", &[]).expect("Failed to spawn opencode");
     eprintln!("Spawned opencode: pid={}", info.pid);
@@ -90,6 +91,7 @@ fn test_pty_reader_opencode() {
 }
 
 #[test]
+#[ignore] // Requires opencode binary in PATH — run locally only
 fn test_pty_reader_opencode_with_resize() {
     let info = ProcessManager::spawn_cli("opencode", &[]).expect("Failed to spawn opencode");
     eprintln!("Spawned opencode: pid={}", info.pid);
