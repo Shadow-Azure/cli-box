@@ -114,6 +114,10 @@ fn main() {
         .or_else(|| Some(uuid::Uuid::new_v4().to_string()[..8].to_string()));
     let sandbox_port = launch_args.sandbox_port.or(Some(5801));
 
+    // Initialize file logging after sandbox_id is known
+    let (_sandbox_guard, _server_guard) =
+        sandbox_core::logging::init_sandbox_logging(sandbox_id.as_deref().unwrap_or("unknown"));
+
     let mode = launch_args.mode.clone().or_else(|| Some("cli".to_string()));
     let cmd = launch_args.cmd.clone().or_else(|| Some("zsh".to_string()));
 

@@ -1,6 +1,21 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// Check if debug logging is enabled via SANDBOX_LOGGER_LEVEL=debug
+fn debug_enabled() -> bool {
+    std::env::var("SANDBOX_LOGGER_LEVEL")
+        .map(|v| v.to_lowercase() == "debug")
+        .unwrap_or(false)
+}
+
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        if debug_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HealthResponse {
@@ -127,9 +142,23 @@ impl SandboxClient {
         use tokio_tungstenite::connect_async;
 
         let url = format!("ws://127.0.0.1:{}/pty/ws/{}", self.port, pid);
+        debug_log!(
+            "[DEBUG-CLI] pty_write: connecting to {}, data_len={}, data_preview={:?}",
+            url,
+            data.len(),
+            if data.len() > 60 { &data[..60] } else { data }
+        );
+        debug_log!(
+            "[DEBUG-CLI] pty_write: data_hex={}",
+            data.bytes()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         let (mut ws_stream, _) = connect_async(&url)
             .await
             .with_context(|| format!("Failed to connect to PTY WebSocket for pid={pid}"))?;
+        debug_log!("[DEBUG-CLI] pty_write: WebSocket connected, sending message...");
 
         ws_stream
             .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -137,9 +166,15 @@ impl SandboxClient {
             ))
             .await
             .with_context(|| "Failed to send data to PTY WebSocket")?;
+        debug_log!("[DEBUG-CLI] pty_write: message sent, waiting 100ms before close...");
 
-        // Close the connection after sending
+        // Wait for the message to be delivered before closing
+        // Without this delay, the WebSocket close handshake can race with
+        // the server's message processing, causing the data to be lost.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         ws_stream.close(None).await.ok();
+        debug_log!("[DEBUG-CLI] pty_write: done");
 
         Ok(())
     }

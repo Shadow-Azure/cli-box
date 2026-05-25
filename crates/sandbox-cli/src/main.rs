@@ -123,15 +123,17 @@ enum Commands {
 
     /// Shutdown the sandbox (legacy, closes first Terminal window)
     Shutdown,
+
+    /// Show log file paths for a sandbox or all sandboxes
+    Logs {
+        /// Sandbox instance ID (omit to show all log paths)
+        id: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let _guard = sandbox_core::logging::init_cli_logging();
 
     let cli = Cli::parse();
 
@@ -186,6 +188,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Shutdown => {
             cmd_shutdown()?;
         }
+        Commands::Logs { id } => {
+            cmd_logs(id.as_deref())?;
+        }
     }
 
     Ok(())
@@ -221,6 +226,10 @@ fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
     };
     println!("Sandbox started: {}", full_cmd);
     println!("Use 'sandbox list' to find the sandbox ID");
+    println!(
+        "Log directory: {}",
+        sandbox_core::logging::log_base_dir().display()
+    );
     Ok(())
 }
 
@@ -521,6 +530,66 @@ end tell"#;
     }
 
     println!("Sandbox shutdown complete.");
+    Ok(())
+}
+
+/// Show log file paths.
+fn cmd_logs(id: Option<&str>) -> anyhow::Result<()> {
+    let base = sandbox_core::logging::log_base_dir();
+    println!("Log base: {}\n", base.display());
+
+    if let Some(sandbox_id) = id {
+        // Show logs for a specific sandbox
+        let path = sandbox_core::logging::sandbox_log_path(sandbox_id);
+        let server = sandbox_core::logging::server_log_path();
+        println!("  Sandbox [{sandbox_id}]:");
+        println!("    {}", path.display());
+        println!("  Server (shared):");
+        println!("    {}", server.display());
+    } else {
+        // Show all known sandboxes and their log paths
+        let registry = InstanceRegistry::default();
+        let instances = registry.list()?;
+
+        if instances.is_empty() {
+            println!("No sandbox instances found.");
+        } else {
+            for inst in &instances {
+                let path = sandbox_core::logging::sandbox_log_path(&inst.id);
+                println!("  [{}] {} → {}", inst.id, inst.title, path.display());
+            }
+        }
+
+        // Show shared logs
+        let server = sandbox_core::logging::server_log_path();
+        let cli = sandbox_core::logging::cli_log_path();
+        println!("\n  Shared logs:");
+        println!("    Server: {}", server.display());
+        println!("    CLI:    {}", cli.display());
+    }
+
+    // List existing log entries
+    if base.exists() {
+        println!("\n  Existing logs:");
+        let mut entries: Vec<String> = std::fs::read_dir(&base)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                if e.path().is_dir() {
+                    format!("{}/", name)
+                } else {
+                    name
+                }
+            })
+            .collect();
+        entries.sort();
+        for d in &entries {
+            println!("    {}", d);
+        }
+    }
+
     Ok(())
 }
 

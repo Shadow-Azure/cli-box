@@ -209,6 +209,12 @@ impl ProcessManager {
                         }
                         Ok(n) => {
                             let text = String::from_utf8_lossy(&read_buf[..n]).to_string();
+                            let hex: String = read_buf[..n].iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
+                            let preview: String = text.chars().take(40).collect();
+                            debug!(
+                                "[DEBUG-PTY-READ] pid={tracked_id}: read {} bytes, text_preview={:?}, hex={}",
+                                n, preview, hex
+                            );
                             // Persist to SQLite (survives reconnections)
                             if let Err(e) = thread_store.append(&text) {
                                 warn!("PTY reader {tracked_id}: store append failed: {e}");

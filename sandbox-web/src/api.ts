@@ -1,3 +1,5 @@
+import { debugLog, debugError } from "./logger";
+
 /**
  * Sandbox HTTP API client.
  *
@@ -243,8 +245,19 @@ export function ptyConnectWs(pid: number): PtyWsConnection {
   const ws = new WebSocket(`${wsBaseUrl()}/pty/ws/${pid}`);
   const listeners: ((data: string) => void)[] = [];
 
+  ws.onopen = () => {
+    debugLog(`frontend: connected to /pty/ws/${pid}`);
+  };
+  ws.onclose = (e) => {
+    debugLog(`frontend: connection closed, code=${e.code}, reason=${e.reason}`);
+  };
+  ws.onerror = (e) => {
+    debugError(`frontend: connection error`, e);
+  };
   ws.onmessage = (e) => {
     if (typeof e.data === "string") {
+      const preview = e.data.length > 80 ? e.data.substring(0, 80) : e.data;
+      debugLog(`frontend: received message, len=${e.data.length}, preview=${JSON.stringify(preview)}`);
       for (const cb of listeners) cb(e.data);
     }
   };
@@ -259,6 +272,9 @@ export function ptyConnectWs(pid: number): PtyWsConnection {
       };
     },
     sendInput(data) {
+      const preview = data.length > 60 ? data.substring(0, 60) : data;
+      const hex = Array.from(data).map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+      debugLog(`frontend: sendInput, len=${data.length}, preview=${JSON.stringify(preview)}, hex=${hex}`);
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     },
     resize(cols, rows) {

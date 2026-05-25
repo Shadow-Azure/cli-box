@@ -405,26 +405,24 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
 
     // Phase 1: Replay existing output from SQLite (late subscriber recovery)
     match ProcessManager::get_store(pid) {
-        Ok(store) => {
-            match store.read_all() {
-                Ok(chunks) => {
-                    let total_chars: usize = chunks.iter().map(|c| c.data.len()).sum();
-                    let num_chunks = chunks.len();
-                    for chunk in chunks {
-                        if ws_tx.send(Message::Text(chunk.data.into())).await.is_err() {
-                            tracing::debug!("[pty_ws] pid={pid}: client disconnected during replay");
-                            return;
-                        }
+        Ok(store) => match store.read_all() {
+            Ok(chunks) => {
+                let total_chars: usize = chunks.iter().map(|c| c.data.len()).sum();
+                let num_chunks = chunks.len();
+                for chunk in chunks {
+                    if ws_tx.send(Message::Text(chunk.data.into())).await.is_err() {
+                        tracing::debug!("[pty_ws] pid={pid}: client disconnected during replay");
+                        return;
                     }
-                    tracing::debug!(
+                }
+                tracing::debug!(
                         "[pty_ws] pid={pid}: replayed {num_chunks} chunks ({total_chars} chars) from SQLite"
                     );
-                }
-                Err(e) => {
-                    tracing::warn!("[pty_ws] pid={pid}: SQLite read failed: {e}");
-                }
             }
-        }
+            Err(e) => {
+                tracing::warn!("[pty_ws] pid={pid}: SQLite read failed: {e}");
+            }
+        },
         Err(e) => {
             tracing::warn!("[pty_ws] pid={pid}: get_store failed: {e}");
         }
@@ -444,6 +442,23 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Text(text) => {
+                    let text_str = text.to_string();
+                    let preview: String = if text_str.len() > 60 {
+                        text_str[..60].to_string()
+                    } else {
+                        text_str.clone()
+                    };
+                    let hex: String = text_str
+                        .bytes()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    tracing::info!(
+                        "[DEBUG-WS-RECV] pid={pid}: received Text, len={}, preview={:?}, hex={}",
+                        text_str.len(),
+                        preview,
+                        hex
+                    );
                     if let Ok(control) = serde_json::from_str::<serde_json::Value>(&text) {
                         if let Some(msg_type) = control.get("type").and_then(|v| v.as_str()) {
                             match msg_type {
@@ -469,8 +484,12 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
                         }
                     }
                     // Plain text: send as PTY input
+                    tracing::info!(
+                        "[DEBUG-WS-SEND-PTY] pid={pid}: calling send_input with {} bytes",
+                        text_str.len()
+                    );
                     let _ = tokio::task::spawn_blocking(move || {
-                        ProcessManager::send_input(pid, text.as_bytes())
+                        ProcessManager::send_input(pid, text_str.as_bytes())
                     })
                     .await;
                 }
