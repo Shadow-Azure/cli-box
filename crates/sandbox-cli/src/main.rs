@@ -153,12 +153,16 @@ async fn main() -> anyhow::Result<()> {
             cmd_list_daemon().await?;
         }
         Commands::Inspect { id } => {
-            cmd_inspect(&id).await?;
+            cmd_inspect_daemon(&id).await?;
         }
         Commands::Close { id } => {
             cmd_close_daemon(&id).await?;
         }
-        Commands::TypeText { text, id, pty: _pty } => {
+        Commands::TypeText {
+            text,
+            id,
+            pty: _pty,
+        } => {
             cmd_type_daemon(&text, &id).await?;
         }
         Commands::Key {
@@ -183,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
             cmd_windows()?;
         }
         Commands::Processes { id } => {
-            cmd_processes(&id).await?;
+            cmd_processes_daemon(&id).await?;
         }
         Commands::Shutdown => {
             cmd_shutdown_daemon().await?;
@@ -347,7 +351,7 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
                 if let Some(p) = sandbox_core::daemon::find_running_daemon() {
                     break p;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             };
             println!("Sandbox daemon started on port {port}");
             port
@@ -369,8 +373,7 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
 
     println!("Creating sandbox: mode={mode}, command={full_cmd}");
 
-    let result =
-        client::daemon_create_sandbox(mode, Some(command), args, None, None).await?;
+    let result = client::daemon_create_sandbox(mode, Some(command), args, None, None).await?;
 
     println!(
         "Sandbox created: id={}, pty_pid={:?}, window_id={:?}",
@@ -457,7 +460,12 @@ async fn cmd_type_daemon(text: &str, id: &str) -> anyhow::Result<()> {
 
 /// Press a key in a sandbox via the daemon API.
 async fn cmd_key_daemon(key: &str, id: &str, modifiers: &[String]) -> anyhow::Result<()> {
-    tracing::info!("[cli] key: key={}, modifiers={:?}, id={}", key, modifiers, id);
+    tracing::info!(
+        "[cli] key: key={}, modifiers={:?}, id={}",
+        key,
+        modifiers,
+        id
+    );
     client::daemon_key(id, key, modifiers).await?;
     println!(
         "Pressed: {}{} -> sandbox {}",
@@ -482,7 +490,9 @@ async fn cmd_click_daemon(x: f64, y: f64, id: &str, button: &str) -> anyhow::Res
 /// Take a screenshot via the daemon API.
 async fn cmd_screenshot_daemon(output: &PathBuf, id: Option<&str>) -> anyhow::Result<()> {
     let sandbox_id = id.ok_or_else(|| {
-        anyhow::anyhow!("--id is required for screenshots. Use: sandbox screenshot --id <sandbox-id>")
+        anyhow::anyhow!(
+            "--id is required for screenshots. Use: sandbox screenshot --id <sandbox-id>"
+        )
     })?;
 
     let png = client::daemon_screenshot(sandbox_id).await?;
@@ -496,6 +506,58 @@ async fn cmd_screenshot_daemon(output: &PathBuf, id: Option<&str>) -> anyhow::Re
 async fn cmd_shutdown_daemon() -> anyhow::Result<()> {
     client::daemon_shutdown().await?;
     println!("Sandbox daemon shut down.");
+    Ok(())
+}
+
+/// Inspect a sandbox via the daemon API.
+async fn cmd_inspect_daemon(id: &str) -> anyhow::Result<()> {
+    let sb = client::daemon_inspect(id).await?;
+
+    println!("Instance:");
+    println!("  ID:       {}", sb.id);
+    println!("  Port:     {}", sb.port);
+    println!("  PTY PID:  {:?}", sb.pty_pid);
+    println!("  Window:   {:?}", sb.window_id);
+    println!("  Status:   {:?}", sb.status);
+
+    let kind = match &sb.kind {
+        sandbox_core::instance::InstanceKind::Cli { command, args } => {
+            if args.is_empty() {
+                format!("CLI({})", command)
+            } else {
+                format!("CLI({} {})", command, args.join(" "))
+            }
+        }
+        sandbox_core::instance::InstanceKind::App { path } => {
+            let name = std::path::Path::new(path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            format!("APP({})", name)
+        }
+    };
+    println!("  Kind:     {}", kind);
+
+    Ok(())
+}
+
+/// List processes in a sandbox via the daemon API.
+async fn cmd_processes_daemon(id: &str) -> anyhow::Result<()> {
+    let processes = client::daemon_processes(id).await?;
+
+    if processes.is_empty() {
+        println!("No processes found in sandbox {}.", id);
+        return Ok(());
+    }
+
+    println!("{:<10}  {:<20}  {:<10}  PATH", "PID", "NAME", "RUNNING");
+    println!("{}", "-".repeat(70));
+    for p in &processes {
+        let running = if p.is_running { "yes" } else { "no" };
+        let path = p.path.as_deref().unwrap_or("-");
+        println!("{:<10}  {:<20}  {:<10}  {}", p.pid, p.name, running, path);
+    }
+    println!("\nTotal: {} process(es)", processes.len());
     Ok(())
 }
 
@@ -754,7 +816,8 @@ fn cmd_windows() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// List processes running inside a sandbox instance.
+/// List processes running inside a sandbox instance (legacy).
+#[allow(dead_code)]
 async fn cmd_processes(id: &str) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
     let processes = client.list_processes().await?;
@@ -925,8 +988,7 @@ fn find_daemon_binary() -> anyhow::Result<PathBuf> {
     for dir_name in &["release", "debug"] {
         let path = exe_dir
             .parent()
-            .map(|p| p.parent())
-            .flatten()
+            .and_then(|p| p.parent())
             .map(|p| p.join("target").join(dir_name).join(daemon_name));
         if let Some(p) = path {
             if p.exists() {

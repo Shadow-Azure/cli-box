@@ -20,9 +20,8 @@ macro_rules! debug_log {
 
 /// Resolve the daemon port from `daemon.json`. Errors if daemon is not running.
 pub fn resolve_daemon_port() -> Result<u16> {
-    sandbox_core::daemon::find_running_daemon().with_context(|| {
-        "Sandbox daemon is not running. Start it with: sandbox start <command>"
-    })
+    sandbox_core::daemon::find_running_daemon()
+        .with_context(|| "Sandbox daemon is not running. Start it with: sandbox start <command>")
 }
 
 /// Returns `http://127.0.0.1:{port}` for the running daemon.
@@ -195,6 +194,40 @@ pub async fn daemon_shutdown() -> Result<()> {
         .error_for_status()
         .with_context(|| "daemon shutdown failed")?;
     Ok(())
+}
+
+/// Inspect a sandbox via the daemon API. Returns sandbox info from the daemon's in-memory state.
+pub async fn daemon_inspect(sandbox_id: &str) -> Result<DaemonSandbox> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/list"))
+        .send()
+        .await
+        .with_context(|| "Failed to fetch sandbox list from daemon")?;
+    let sandboxes: Vec<DaemonSandbox> = resp.json().await?;
+    sandboxes
+        .into_iter()
+        .find(|sb| sb.id == sandbox_id)
+        .with_context(|| format!("Sandbox '{sandbox_id}' not found in daemon"))
+}
+
+/// List processes in a sandbox via the daemon HTTP API.
+pub async fn daemon_processes(sandbox_id: &str) -> Result<Vec<ProcessInfo>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/{sandbox_id}/processes"))
+        .send()
+        .await
+        .with_context(|| "processes request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("processes failed (HTTP {status}): {text}");
+    }
+    let processes: Vec<ProcessInfo> = resp.json().await?;
+    Ok(processes)
 }
 
 fn reqwest_client() -> reqwest::Client {

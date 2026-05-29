@@ -10,7 +10,9 @@ use crate::capture::ScreenCapture;
 use crate::error::AppError;
 use crate::instance::{generate_instance_id, InstanceKind, InstanceRegistry, InstanceStatus};
 use crate::process::ProcessManager;
-use crate::server::{handle_pty_ws, ClickRequest, KeyRequest, ScrollRequest, SpawnAppRequest, TypeRequest};
+use crate::server::{
+    handle_pty_ws, ClickRequest, KeyRequest, ScrollRequest, SpawnAppRequest, TypeRequest,
+};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -192,10 +194,8 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
         .route("/sandbox/{id}/input/type", post(type_handler))
         .route("/sandbox/{id}/input/key", post(key_handler))
         .route("/sandbox/{id}/input/scroll", post(scroll_handler))
-        .route(
-            "/sandbox/{id}/pty/ws/{pid}",
-            get(pty_ws_upgrade_handler),
-        )
+        .route("/sandbox/{id}/pty/ws/{pid}", get(pty_ws_upgrade_handler))
+        .route("/sandbox/{id}/processes", get(processes_handler))
         .route("/sandbox/{id}/app/spawn", post(spawn_app_handler))
         .route("/sandbox/{id}/windows", get(windows_handler))
         .route(
@@ -209,9 +209,7 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
 
 // ── Handlers ──────────────────────────────────────────────────
 
-async fn health_handler(
-    State(state): State<Arc<Mutex<DaemonState>>>,
-) -> Json<HealthResponse> {
+async fn health_handler(State(state): State<Arc<Mutex<DaemonState>>>) -> Json<HealthResponse> {
     let s = state.lock().await;
     Json(HealthResponse {
         status: "ok".to_string(),
@@ -273,11 +271,7 @@ async fn create_sandbox_handler(
             );
             registry.register(&instance)?;
 
-            state
-                .lock()
-                .await
-                .sandboxes
-                .insert(id.clone(), managed);
+            state.lock().await.sandboxes.insert(id.clone(), managed);
 
             tracing::info!("Created CLI sandbox: id={}, pid={}", id, info.pid);
 
@@ -288,17 +282,15 @@ async fn create_sandbox_handler(
             }))
         }
         "app" => {
-            let app_path = req
-                .command
-                .clone()
-                .ok_or_else(|| AppError::BadRequest("app mode requires 'command' (app path)".into()))?;
+            let app_path = req.command.clone().ok_or_else(|| {
+                AppError::BadRequest("app mode requires 'command' (app path)".into())
+            })?;
 
-            let (process_info, window_id) =
-                tokio::task::spawn_blocking(move || {
-                    ProcessManager::spawn_app_with_window(&app_path)
-                })
-                .await
-                .map_err(|e| AppError::Process(format!("spawn_app panicked: {e}")))??;
+            let (process_info, window_id) = tokio::task::spawn_blocking(move || {
+                ProcessManager::spawn_app_with_window(&app_path)
+            })
+            .await
+            .map_err(|e| AppError::Process(format!("spawn_app panicked: {e}")))??;
 
             let kind = InstanceKind::App {
                 path: req.command.clone().unwrap(),
@@ -322,11 +314,7 @@ async fn create_sandbox_handler(
             );
             registry.register(&instance)?;
 
-            state
-                .lock()
-                .await
-                .sandboxes
-                .insert(id.clone(), managed);
+            state.lock().await.sandboxes.insert(id.clone(), managed);
 
             tracing::info!(
                 "Created APP sandbox: id={}, pid={}, window_id={:?}",
@@ -352,16 +340,11 @@ async fn close_sandbox_handler(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let removed = state.lock().await.sandboxes.remove(&id);
-    let sandbox = removed.ok_or_else(|| {
-        AppError::Instance(format!("Sandbox '{id}' not found"))
-    })?;
+    let sandbox = removed.ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
 
     // Kill PTY process if present
     if let Some(pty_pid) = sandbox.pty_pid {
-        let _ = tokio::task::spawn_blocking(move || {
-            ProcessManager::kill_process(pty_pid)
-        })
-        .await;
+        let _ = tokio::task::spawn_blocking(move || ProcessManager::kill_process(pty_pid)).await;
     }
 
     // Unregister from file-system registry
@@ -378,9 +361,10 @@ async fn screenshot_handler(
 ) -> Result<impl IntoResponse, AppError> {
     let window_id = {
         let s = state.lock().await;
-        let sandbox = s.sandboxes.get(&id).ok_or_else(|| {
-            AppError::Instance(format!("Sandbox '{id}' not found"))
-        })?;
+        let sandbox = s
+            .sandboxes
+            .get(&id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
         sandbox.window_id
     };
 
@@ -406,9 +390,10 @@ async fn click_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let target_pid = {
         let s = state.lock().await;
-        let sb = s.sandboxes.get(&id).ok_or_else(|| {
-            AppError::Instance(format!("Sandbox '{id}' not found"))
-        })?;
+        let sb = s
+            .sandboxes
+            .get(&id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
         sb.pty_pid
     };
     let button = match req.button.to_lowercase().as_str() {
@@ -430,9 +415,10 @@ async fn type_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let target_pid = {
         let s = state.lock().await;
-        let sb = s.sandboxes.get(&id).ok_or_else(|| {
-            AppError::Instance(format!("Sandbox '{id}' not found"))
-        })?;
+        let sb = s
+            .sandboxes
+            .get(&id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
         sb.pty_pid
     };
     InputSimulator::type_text(&req.text, target_pid)?;
@@ -446,9 +432,10 @@ async fn key_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let target_pid = {
         let s = state.lock().await;
-        let sb = s.sandboxes.get(&id).ok_or_else(|| {
-            AppError::Instance(format!("Sandbox '{id}' not found"))
-        })?;
+        let sb = s
+            .sandboxes
+            .get(&id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
         sb.pty_pid
     };
     let mod_refs: Vec<&str> = req.modifiers.iter().map(|s| s.as_str()).collect();
@@ -465,9 +452,10 @@ async fn scroll_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let target_pid = {
         let s = state.lock().await;
-        let sb = s.sandboxes.get(&id).ok_or_else(|| {
-            AppError::Instance(format!("Sandbox '{id}' not found"))
-        })?;
+        let sb = s
+            .sandboxes
+            .get(&id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
         sb.pty_pid
     };
     InputSimulator::scroll(req.x, req.y, &req.direction, req.amount, target_pid)?;
@@ -527,6 +515,23 @@ async fn windows_handler(
     Ok(Json(windows))
 }
 
+async fn processes_handler(
+    State(state): State<Arc<Mutex<DaemonState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::process::ProcessInfo>>, AppError> {
+    // Verify sandbox exists
+    {
+        let s = state.lock().await;
+        if !s.sandboxes.contains_key(&id) {
+            return Err(AppError::Instance(format!("Sandbox '{id}' not found")));
+        }
+    }
+
+    let processes = ProcessManager::list_processes()?;
+    tracing::debug!("processes_handler: {} running", processes.len());
+    Ok(Json(processes))
+}
+
 async fn ui_inspect_handler(
     Path((id, window_id)): Path<(String, u32)>,
     State(state): State<Arc<Mutex<DaemonState>>>,
@@ -564,7 +569,10 @@ async fn shutdown_handler() -> Json<serde_json::Value> {
 /// interrupted. Cleans up `daemon.json` on ctrl-c.
 pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     write_daemon_info(port)?;
-    tracing::info!("Daemon starting on port {port} (pid={})", std::process::id());
+    tracing::info!(
+        "Daemon starting on port {port} (pid={})",
+        std::process::id()
+    );
 
     let state = Arc::new(Mutex::new(DaemonState {
         port,
@@ -598,7 +606,11 @@ mod tests {
     use super::*;
 
     fn test_dir(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("sandbox_daemon_test_{}_{}", std::process::id(), tag))
+        std::env::temp_dir().join(format!(
+            "sandbox_daemon_test_{}_{}",
+            std::process::id(),
+            tag
+        ))
     }
 
     #[test]
@@ -701,8 +713,7 @@ mod tests {
 
     #[test]
     fn create_sandbox_request_defaults() {
-        let req: CreateSandboxRequest =
-            serde_json::from_str(r#"{"mode": "cli"}"#).unwrap();
+        let req: CreateSandboxRequest = serde_json::from_str(r#"{"mode": "cli"}"#).unwrap();
         assert_eq!(req.mode, "cli");
         assert!(req.command.is_none());
         assert!(req.args.is_empty());
