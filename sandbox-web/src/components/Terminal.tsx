@@ -44,44 +44,30 @@ function buildTerminalTheme(t: TerminalTheme): Record<string, string> {
  * Bypass xterm.js WriteBuffer's setTimeout-based scheduling which stalls in
  * Tauri's WKWebView. Instead, call InputHandler.parse() directly and then
  * fire the write-parsed event to trigger rendering.
- *
- * Safety nets:
- *  - Falls back to term.write() if internal API shape is unexpected (xterm upgrade)
- *  - Splits large payloads into 32KB chunks to avoid blocking the main thread
- *  - Once the direct path fails once, permanently falls back to term.write()
  */
-const CHUNK_SIZE = 32 * 1024;
-let directParseBroken = false;
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type XtermCore = { _inputHandler?: { parse?: (d: string | Uint8Array, sync: boolean) => void }; _writeBuffer?: { _onWriteParsed?: { fire: () => void } } };
-
 function writeDirect(term: Terminal, data: string | Uint8Array): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const core: XtermCore | undefined = (term as any)._core ?? (term as any).core;
+  const core = (term as any)._core ?? (term as any).core;
+  if (!core) return;
+  const ih = core._inputHandler;
+  if (!ih || typeof ih.parse !== "function") return;
 
-  if (directParseBroken || !core?._inputHandler?.parse) {
-    directParseBroken = true;
-    term.write(data as string);
-    return;
+  // 防止单次解析过大数据导致主线程冻结
+  const CHUNK_SIZE = 32 * 1024; // 32KB
+  if (typeof data === "string" && data.length > CHUNK_SIZE) {
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      ih.parse(data.slice(i, i + CHUNK_SIZE), true);
+    }
+  } else if (data instanceof Uint8Array && data.length > CHUNK_SIZE) {
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      ih.parse(data.slice(i, i + CHUNK_SIZE), true);
+    }
+  } else {
+    ih.parse(data, true);
   }
 
-  try {
-    const parse = core._inputHandler.parse.bind(core._inputHandler);
-
-    if ((typeof data === "string" ? data.length : data.length) > CHUNK_SIZE) {
-      for (let i = 0; i < data.length; i += CHUNK_SIZE) {
-        const end = Math.min(i + CHUNK_SIZE, data.length);
-        parse(typeof data === "string" ? data.slice(i, end) : data.slice(i, end), true);
-      }
-    } else {
-      parse(data, true);
-    }
-
-    core._writeBuffer?._onWriteParsed?.fire();
-  } catch {
-    directParseBroken = true;
-    term.write(data as string);
+  if (core._writeBuffer?._onWriteParsed) {
+    core._writeBuffer._onWriteParsed.fire();
   }
 }
 
