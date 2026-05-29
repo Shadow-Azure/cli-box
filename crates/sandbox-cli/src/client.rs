@@ -44,6 +44,7 @@ pub struct ProcessInfo {
 #[derive(Debug, Deserialize)]
 pub struct ReadyzResponse {
     pub status: String,
+    #[allow(dead_code)]
     pub http_server: bool,
     pub pty_active: bool,
     pub pending_cli: bool,
@@ -681,7 +682,8 @@ mod tests {
 
     #[test]
     fn test_deserialize_readyz_not_ready() {
-        let json = r#"{"status":"not_ready","http_server":true,"pty_active":false,"pending_cli":false}"#;
+        let json =
+            r#"{"status":"not_ready","http_server":true,"pty_active":false,"pending_cli":false}"#;
         let resp: ReadyzResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.status, "not_ready");
         assert!(!resp.pty_active);

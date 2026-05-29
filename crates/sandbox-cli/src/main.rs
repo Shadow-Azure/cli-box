@@ -256,18 +256,15 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
     };
 
     // Check if the instance reported an error during startup
-    match &instance.status {
-        sandbox_core::instance::InstanceStatus::Error(msg) => {
-            anyhow::bail!(
-                "Sandbox failed to start: {msg}\n\
-                 Instance ID: {}, Port: {}\n\
-                 Check logs at: {}",
-                instance.id,
-                instance.port,
-                log_dir.display()
-            );
-        }
-        _ => {}
+    if let sandbox_core::instance::InstanceStatus::Error(msg) = &instance.status {
+        anyhow::bail!(
+            "Sandbox failed to start: {msg}\n\
+             Instance ID: {}, Port: {}\n\
+             Check logs at: {}",
+            instance.id,
+            instance.port,
+            log_dir.display()
+        );
     }
 
     // Phase 2: Wait for HTTP server /readyz to respond
@@ -287,7 +284,7 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
         }
         match client.readyz().await {
             Ok(resp) if resp.status == "ready" => break resp,
-            Ok(_) => {} // not_ready, keep polling
+            Ok(_) => {}  // not_ready, keep polling
             Err(_) => {} // connection refused, keep polling
         }
         // Re-check instance status for errors between polls

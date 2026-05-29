@@ -295,9 +295,7 @@ async fn spawn_cli_handler(
         s.pending_cli = None;
         if let Some(ref id) = s.sandbox_id {
             let registry = crate::instance::InstanceRegistry::default();
-            if let Err(e) =
-                registry.update_status(id, crate::instance::InstanceStatus::Running)
-            {
+            if let Err(e) = registry.update_status(id, crate::instance::InstanceStatus::Running) {
                 tracing::warn!("Failed to update instance status to Running: {e}");
             }
         }
@@ -452,7 +450,11 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
                     "[pty_ws] pid={pid}: Phase 1 replaying {num_chunks} chunks ({total_chars} chars) from SQLite"
                 );
                 for chunk in chunks {
-                    if ws_tx.send(Message::Binary(chunk.data.into_bytes().into())).await.is_err() {
+                    if ws_tx
+                        .send(Message::Binary(chunk.data.into_bytes().into()))
+                        .await
+                        .is_err()
+                    {
                         tracing::info!("[pty_ws] pid={pid}: client disconnected during replay");
                         return;
                     }
@@ -486,7 +488,7 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
                     Ok(msg) => {
                         msg_count += 1;
                         buffer.push_str(&msg);
-                        if msg_count <= 20 || msg_count % 50 == 0 {
+                        if msg_count <= 20 || msg_count.is_multiple_of(50) {
                             tracing::info!(
                                 "[pty_ws] pid={pid}: Phase 2 buffered msg #{msg_count}, {} bytes (buf: {})",
                                 msg.len(), buffer.len()
@@ -533,16 +535,13 @@ async fn handle_pty_ws(pid: u32, socket: WebSocket) {
                                 let text_str = text.to_string();
                                 if let Ok(control) = serde_json::from_str::<serde_json::Value>(&text_str) {
                                     if let Some(msg_type) = control.get("type").and_then(|v| v.as_str()) {
-                                        match msg_type {
-                                            "resize" => {
-                                                let cols = control.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-                                                let rows = control.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-                                                let _ = tokio::task::spawn_blocking(move || {
-                                                    ProcessManager::resize_pty(pid, cols, rows)
-                                                }).await;
-                                                continue;
-                                            }
-                                            _ => {}
+                                        if msg_type == "resize" {
+                                            let cols = control.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                                            let rows = control.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                                            let _ = tokio::task::spawn_blocking(move || {
+                                                ProcessManager::resize_pty(pid, cols, rows)
+                                            }).await;
+                                            continue;
                                         }
                                     }
                                 }
