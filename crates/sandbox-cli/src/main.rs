@@ -147,37 +147,37 @@ async fn main() -> anyhow::Result<()> {
                 (true, _) | (false, None) => ("zsh".to_string(), args),
                 (false, Some(c)) => (c, args),
             };
-            cmd_start(&cmd, &cmd_args).await?;
+            cmd_start_daemon(&cmd, &cmd_args).await?;
         }
         Commands::List => {
-            cmd_list()?;
+            cmd_list_daemon().await?;
         }
         Commands::Inspect { id } => {
             cmd_inspect(&id).await?;
         }
         Commands::Close { id } => {
-            cmd_close(&id).await?;
+            cmd_close_daemon(&id).await?;
         }
-        Commands::TypeText { text, id, pty } => {
-            cmd_type(&text, &id, pty).await?;
+        Commands::TypeText { text, id, pty: _pty } => {
+            cmd_type_daemon(&text, &id).await?;
         }
         Commands::Key {
             key,
             id,
             modifiers,
-            pty,
+            pty: _pty,
         } => {
-            cmd_key(&key, &id, &modifiers, pty).await?;
+            cmd_key_daemon(&key, &id, &modifiers).await?;
         }
         Commands::Click { x, y, id, button } => {
-            cmd_click(x, y, &id, &button).await?;
+            cmd_click_daemon(x, y, &id, &button).await?;
         }
         Commands::Screenshot {
             output,
             id,
-            window_id,
+            window_id: _window_id,
         } => {
-            cmd_screenshot(&output, id.as_deref(), window_id).await?;
+            cmd_screenshot_daemon(&output, id.as_deref()).await?;
         }
         Commands::Windows => {
             cmd_windows()?;
@@ -186,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
             cmd_processes(&id).await?;
         }
         Commands::Shutdown => {
-            cmd_shutdown()?;
+            cmd_shutdown_daemon().await?;
         }
         Commands::Logs { id } => {
             cmd_logs(id.as_deref())?;
@@ -198,10 +198,11 @@ async fn main() -> anyhow::Result<()> {
 
 // ── Command Implementations ─────────────────────────────
 
-/// Launch the Tauri sandbox app with the given CLI command inside it.
+/// Launch the Tauri sandbox app with the given CLI command inside it (legacy).
 ///
 /// After spawning the Tauri process, polls the instance registry and `/readyz`
 /// endpoint to verify the sandbox is actually ready before returning.
+#[allow(dead_code)]
 async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
     let bundle_path = find_tauri_bundle()?;
     let app_binary = bundle_path.join("Contents/MacOS/system-test-sandbox");
@@ -315,7 +316,193 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// List all registered sandbox instances.
+// ── Daemon-aware command implementations ─────────────────────
+
+/// Start a sandbox via the daemon: ensures daemon is running, then creates a sandbox.
+async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> {
+    let port = match sandbox_core::daemon::find_running_daemon() {
+        Some(p) => {
+            println!("Sandbox daemon already running on port {p}");
+            p
+        }
+        None => {
+            // Spawn the daemon binary
+            let daemon_bin = find_daemon_binary()?;
+            tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
+
+            let _child = Command::new(&daemon_bin)
+                .spawn()
+                .context("Failed to launch sandbox-daemon")?;
+
+            // Wait for daemon.json to appear (up to 5s)
+            let timeout = std::time::Duration::from_secs(5);
+            let start = std::time::Instant::now();
+            let port = loop {
+                if start.elapsed() > timeout {
+                    anyhow::bail!(
+                        "Timeout: sandbox daemon did not start within {}s.",
+                        timeout.as_secs()
+                    );
+                }
+                if let Some(p) = sandbox_core::daemon::find_running_daemon() {
+                    break p;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            };
+            println!("Sandbox daemon started on port {port}");
+            port
+        }
+    };
+
+    // Determine mode: "app" if command ends with .app, else "cli"
+    let mode = if command.to_lowercase().ends_with(".app") {
+        "app"
+    } else {
+        "cli"
+    };
+
+    let full_cmd = if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{} {}", command, args.join(" "))
+    };
+
+    println!("Creating sandbox: mode={mode}, command={full_cmd}");
+
+    let result =
+        client::daemon_create_sandbox(mode, Some(command), args, None, None).await?;
+
+    println!(
+        "Sandbox created: id={}, pty_pid={:?}, window_id={:?}",
+        result.sandbox_id, result.pty_pid, result.window_id
+    );
+    println!("Daemon port: {port}");
+
+    Ok(())
+}
+
+/// List all sandboxes via the daemon API.
+async fn cmd_list_daemon() -> anyhow::Result<()> {
+    let sandboxes = client::daemon_list_sandboxes().await?;
+
+    if sandboxes.is_empty() {
+        println!("No sandbox instances found.");
+        println!("Start one with: sandbox start  (opens zsh by default)");
+        println!("Or: sandbox start <command>  (e.g., sandbox start claude)");
+        return Ok(());
+    }
+
+    println!(
+        "{:<12}  {:<20}  {:<10}  {:<10}  {:<8}  {:<8}  CREATED",
+        "ID", "KIND", "STATUS", "PID", "WINDOW", "PORT"
+    );
+    println!("{}", "-".repeat(100));
+
+    for sb in &sandboxes {
+        let kind = match &sb.kind {
+            sandbox_core::instance::InstanceKind::Cli { command, .. } => {
+                format!("CLI({})", command)
+            }
+            sandbox_core::instance::InstanceKind::App { path } => {
+                let name = std::path::Path::new(path)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                format!("APP({})", name)
+            }
+        };
+        let kind_display = if kind.len() > 20 {
+            format!("{}...", &kind[..17])
+        } else {
+            kind
+        };
+        let status = match &sb.status {
+            sandbox_core::instance::InstanceStatus::Starting => "Starting",
+            sandbox_core::instance::InstanceStatus::Running => "Running",
+            sandbox_core::instance::InstanceStatus::Stopped => "Stopped",
+            sandbox_core::instance::InstanceStatus::Error(e) => e,
+        };
+        let pid_str = sb
+            .pty_pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "-".into());
+        let wid_str = sb
+            .window_id
+            .map(|w| w.to_string())
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<12}  {:<20}  {:<10}  {:<10}  {:<8}  {:<8}",
+            sb.id, kind_display, status, pid_str, wid_str, sb.port
+        );
+    }
+    println!("\nTotal: {} instance(s)", sandboxes.len());
+    Ok(())
+}
+
+/// Close a sandbox via the daemon API.
+async fn cmd_close_daemon(id: &str) -> anyhow::Result<()> {
+    println!("Closing sandbox {id}...");
+    client::daemon_close(id).await?;
+    println!("Sandbox {id} closed.");
+    Ok(())
+}
+
+/// Type text in a sandbox via the daemon API.
+async fn cmd_type_daemon(text: &str, id: &str) -> anyhow::Result<()> {
+    tracing::info!("[cli] type: text_len={}, id={}", text.len(), id);
+    client::daemon_type(id, text).await?;
+    println!("Typed: {:?} -> sandbox {}", text, id);
+    Ok(())
+}
+
+/// Press a key in a sandbox via the daemon API.
+async fn cmd_key_daemon(key: &str, id: &str, modifiers: &[String]) -> anyhow::Result<()> {
+    tracing::info!("[cli] key: key={}, modifiers={:?}, id={}", key, modifiers, id);
+    client::daemon_key(id, key, modifiers).await?;
+    println!(
+        "Pressed: {}{} -> sandbox {}",
+        if modifiers.is_empty() {
+            String::new()
+        } else {
+            format!("{:?}+", modifiers)
+        },
+        key,
+        id
+    );
+    Ok(())
+}
+
+/// Click in a sandbox via the daemon API.
+async fn cmd_click_daemon(x: f64, y: f64, id: &str, button: &str) -> anyhow::Result<()> {
+    client::daemon_click(id, x, y, button).await?;
+    println!("Clicked ({}, {}) [{}] -> sandbox {}", x, y, button, id);
+    Ok(())
+}
+
+/// Take a screenshot via the daemon API.
+async fn cmd_screenshot_daemon(output: &PathBuf, id: Option<&str>) -> anyhow::Result<()> {
+    let sandbox_id = id.ok_or_else(|| {
+        anyhow::anyhow!("--id is required for screenshots. Use: sandbox screenshot --id <sandbox-id>")
+    })?;
+
+    let png = client::daemon_screenshot(sandbox_id).await?;
+    std::fs::write(output, &png)
+        .with_context(|| format!("Failed to write screenshot to {:?}", output))?;
+    println!("Screenshot saved to {:?} ({} bytes)", output, png.len());
+    Ok(())
+}
+
+/// Shutdown the daemon via HTTP.
+async fn cmd_shutdown_daemon() -> anyhow::Result<()> {
+    client::daemon_shutdown().await?;
+    println!("Sandbox daemon shut down.");
+    Ok(())
+}
+
+// ── Legacy command implementations (kept for reference) ──────
+
+/// List all registered sandbox instances (legacy, reads from filesystem registry).
+#[allow(dead_code)]
 fn cmd_list() -> anyhow::Result<()> {
     let registry = InstanceRegistry::default();
     let instances = registry.list()?;
@@ -370,7 +557,8 @@ fn return_ref(s: &str) -> &str {
     s
 }
 
-/// Show details of a specific sandbox instance.
+/// Show details of a specific sandbox instance (legacy, reads per-instance HTTP API).
+#[allow(dead_code)]
 async fn cmd_inspect(id: &str) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
 
@@ -406,7 +594,8 @@ async fn cmd_inspect(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Close a sandbox instance via HTTP API.
+/// Close a sandbox instance via HTTP API (legacy).
+#[allow(dead_code)]
 async fn cmd_close(id: &str) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
 
@@ -421,7 +610,8 @@ async fn cmd_close(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Type text into a sandbox.
+/// Type text into a sandbox (legacy).
+#[allow(dead_code)]
 async fn cmd_type(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
     tracing::info!(
@@ -442,7 +632,8 @@ async fn cmd_type(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Press a key in a sandbox.
+/// Press a key in a sandbox (legacy).
+#[allow(dead_code)]
 async fn cmd_key(key: &str, id: &str, modifiers: &[String], pty: bool) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
     tracing::info!(
@@ -495,7 +686,8 @@ async fn cmd_key(key: &str, id: &str, modifiers: &[String], pty: bool) -> anyhow
     Ok(())
 }
 
-/// Click at coordinates in a sandbox.
+/// Click at coordinates in a sandbox (legacy).
+#[allow(dead_code)]
 async fn cmd_click(x: f64, y: f64, id: &str, button: &str) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
     client.click(x, y, button).await?;
@@ -503,7 +695,8 @@ async fn cmd_click(x: f64, y: f64, id: &str, button: &str) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Take a screenshot.
+/// Take a screenshot (legacy).
+#[allow(dead_code)]
 async fn cmd_screenshot(
     output: &PathBuf,
     id: Option<&str>,
@@ -582,7 +775,8 @@ async fn cmd_processes(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Legacy shutdown command.
+/// Legacy shutdown command (osascript-based).
+#[allow(dead_code)]
 fn cmd_shutdown() -> anyhow::Result<()> {
     let windows = ScreenCapture::list_windows()
         .context("Failed to list windows. Is Screen Recording permission granted?")?;
@@ -711,6 +905,50 @@ fn find_tauri_bundle() -> anyhow::Result<PathBuf> {
             .join("../target/release/bundle/macos")
             .join(app_name)
             .display()
+    )
+}
+
+/// Locate the `sandbox-daemon` binary next to the current executable.
+fn find_daemon_binary() -> anyhow::Result<PathBuf> {
+    let exe_path = std::env::current_exe().context("Failed to get current exe path")?;
+    let exe_dir = exe_path.parent().context("No parent dir for exe")?;
+
+    let daemon_name = "sandbox-daemon";
+
+    // Same directory as current exe
+    let path1 = exe_dir.join(daemon_name);
+    if path1.exists() {
+        return Ok(path1);
+    }
+
+    // target/release/ or target/debug/ (relative to project root)
+    for dir_name in &["release", "debug"] {
+        let path = exe_dir
+            .parent()
+            .map(|p| p.parent())
+            .flatten()
+            .map(|p| p.join("target").join(dir_name).join(daemon_name));
+        if let Some(p) = path {
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+    }
+
+    // Check target/debug/ directly from the current exe if we're in the project
+    let cwd = std::env::current_dir().unwrap_or_default();
+    for dir_name in &["release", "debug"] {
+        let path = cwd.join("target").join(dir_name).join(daemon_name);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    anyhow::bail!(
+        "sandbox-daemon binary not found.\n\
+         Searched:\n  {}\n\
+         Build it first with: cargo build -p sandbox-daemon",
+        path1.display()
     )
 }
 

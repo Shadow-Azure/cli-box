@@ -16,6 +16,194 @@ macro_rules! debug_log {
     };
 }
 
+// ── Daemon discovery helpers ──────────────────────────────────
+
+/// Resolve the daemon port from `daemon.json`. Errors if daemon is not running.
+pub fn resolve_daemon_port() -> Result<u16> {
+    sandbox_core::daemon::find_running_daemon().with_context(|| {
+        "Sandbox daemon is not running. Start it with: sandbox start <command>"
+    })
+}
+
+/// Returns `http://127.0.0.1:{port}` for the running daemon.
+pub fn daemon_base_url() -> Result<String> {
+    let port = resolve_daemon_port()?;
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+// ── Daemon API response types ─────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DaemonHealthResponse {
+    pub status: String,
+    pub version: String,
+    pub uptime_secs: u64,
+    pub sandboxes: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DaemonSandbox {
+    pub id: String,
+    pub kind: sandbox_core::instance::InstanceKind,
+    pub status: sandbox_core::instance::InstanceStatus,
+    pub port: u16,
+    pub pty_pid: Option<u32>,
+    pub window_id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSandboxResponse {
+    pub sandbox_id: String,
+    pub pty_pid: Option<u32>,
+    pub window_id: Option<u32>,
+}
+
+// ── Daemon API commands ───────────────────────────────────────
+
+/// Create a new sandbox via the daemon HTTP API.
+pub async fn daemon_create_sandbox(
+    mode: &str,
+    command: Option<&str>,
+    args: &[String],
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<CreateSandboxResponse> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let body = serde_json::json!({
+        "mode": mode,
+        "command": command,
+        "args": args,
+        "cols": cols,
+        "rows": rows,
+    });
+    let resp = client
+        .post(format!("{base}/sandbox/create"))
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| "Failed to connect to sandbox daemon")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon create failed (HTTP {status}): {text}");
+    }
+    let result: CreateSandboxResponse = resp.json().await?;
+    Ok(result)
+}
+
+/// List all sandboxes via the daemon HTTP API.
+pub async fn daemon_list_sandboxes() -> Result<Vec<DaemonSandbox>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/list"))
+        .send()
+        .await
+        .with_context(|| "Failed to connect to sandbox daemon")?;
+    let list: Vec<DaemonSandbox> = resp.json().await?;
+    Ok(list)
+}
+
+/// Take a screenshot of a sandbox via the daemon HTTP API. Returns PNG bytes.
+pub async fn daemon_screenshot(sandbox_id: &str) -> Result<Vec<u8>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/{sandbox_id}/screenshot"))
+        .send()
+        .await
+        .with_context(|| "screenshot request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("screenshot failed (HTTP {status}): {text}");
+    }
+    let bytes = resp.bytes().await?.to_vec();
+    Ok(bytes)
+}
+
+/// Click in a sandbox via the daemon HTTP API.
+pub async fn daemon_click(sandbox_id: &str, x: f64, y: f64, button: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/click"))
+        .json(&serde_json::json!({ "x": x, "y": y, "button": button }))
+        .send()
+        .await
+        .with_context(|| "click request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "click failed")?;
+    Ok(())
+}
+
+/// Type text in a sandbox via the daemon HTTP API.
+pub async fn daemon_type(sandbox_id: &str, text: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/type"))
+        .json(&serde_json::json!({ "text": text }))
+        .send()
+        .await
+        .with_context(|| "type request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "type failed")?;
+    Ok(())
+}
+
+/// Press a key in a sandbox via the daemon HTTP API.
+pub async fn daemon_key(sandbox_id: &str, key: &str, modifiers: &[String]) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/key"))
+        .json(&serde_json::json!({ "key": key, "modifiers": modifiers }))
+        .send()
+        .await
+        .with_context(|| "key request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "key failed")?;
+    Ok(())
+}
+
+/// Close a sandbox via the daemon HTTP API.
+pub async fn daemon_close(sandbox_id: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/close"))
+        .send()
+        .await
+        .with_context(|| "close request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "close failed")?;
+    Ok(())
+}
+
+/// Shut down the daemon via HTTP.
+pub async fn daemon_shutdown() -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/shutdown"))
+        .send()
+        .await
+        .with_context(|| "shutdown request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "daemon shutdown failed")?;
+    Ok(())
+}
+
+fn reqwest_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HealthResponse {
