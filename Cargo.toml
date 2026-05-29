@@ -4,6 +4,7 @@ members = [
     "crates/sandbox-core",
     "crates/sandbox-cli",
     "src-tauri",
+    "crates/sandbox-daemon",
 ]
 
 [workspace.package]
