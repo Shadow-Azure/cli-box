@@ -377,6 +377,19 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     );
     println!("Daemon port: {port}");
 
+    // Ensure Electron is running
+    if !find_running_electron() {
+        if let Ok(electron_bin) = find_electron_binary() {
+            tracing::info!("[start] spawning Electron: {}", electron_bin.display());
+            let _child = Command::new(&electron_bin)
+                .spawn()
+                .context("Failed to launch Electron app")?;
+            tracing::info!("[start] Electron launched");
+        } else {
+            tracing::warn!("[start] Electron app not found, running in headless daemon mode");
+        }
+    }
+
     Ok(())
 }
 
@@ -1050,6 +1063,66 @@ fn find_daemon_binary() -> anyhow::Result<PathBuf> {
          Build it first with: cargo build -p sandbox-daemon",
         path1.display()
     )
+}
+
+/// Locate the Electron app binary next to the current executable.
+fn find_electron_binary() -> anyhow::Result<PathBuf> {
+    let exe_path = std::env::current_exe().context("Failed to get current exe path")?;
+    let exe_dir = exe_path.parent().context("No parent dir for exe")?;
+
+    // Check for Electron binary in release directory
+    let electron_name = "System Test Sandbox";
+    let app_bundle = exe_dir.join(format!("{electron_name}.app"));
+    if app_bundle.exists() {
+        return Ok(app_bundle.join("Contents/MacOS/system-test-sandbox"));
+    }
+
+    // Dev mode: check dist/electron
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let dev_bundle = cwd.join("dist/electron/mac-arm64/System Test Sandbox.app");
+    if dev_bundle.exists() {
+        return Ok(dev_bundle.join("Contents/MacOS/system-test-sandbox"));
+    }
+
+    // Also check x64
+    let dev_bundle_x64 = cwd.join("dist/electron/mac/System Test Sandbox.app");
+    if dev_bundle_x64.exists() {
+        return Ok(dev_bundle_x64.join("Contents/MacOS/system-test-sandbox"));
+    }
+
+    anyhow::bail!("Electron app not found. Build it first: cd electron-app && pnpm build && pnpm pack")
+}
+
+/// Check if Electron is already running by reading ~/.sandbox/electron.json
+fn find_running_electron() -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home).join(".sandbox").join("electron.json");
+    if !path.exists() {
+        return false;
+    }
+    let json = match std::fs::read_to_string(&path) {
+        Ok(j) => j,
+        Err(_) => return false,
+    };
+    let info: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let pid = match info["pid"].as_u64() {
+        Some(p) => p as i32,
+        None => return false,
+    };
+    let alive = std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if alive {
+        return true;
+    }
+    let _ = std::fs::remove_file(&path);
+    false
 }
 
 fn discover_sandbox_window() -> anyhow::Result<u32> {
