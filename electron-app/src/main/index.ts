@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "path";
 import { ensureDaemon, killDaemon } from "./daemon-bridge";
+import * as tabManager from "./tab-manager";
 
 let mainWindow: BrowserWindow | null = null;
 let daemonPort: number | null = null;
@@ -33,6 +34,31 @@ if (!gotTheLock) {
 // IPC: renderer asks for daemon port
 ipcMain.handle("get-daemon-port", () => daemonPort);
 
+// IPC: renderer requests new tab
+ipcMain.handle("create-tab", (_event, sandboxId: string, kind: string, title: string) => {
+  if (!daemonPort) throw new Error("Daemon not running");
+  tabManager.createTab(sandboxId, kind as "cli" | "app", title, daemonPort);
+});
+
+// IPC: renderer requests tab switch
+ipcMain.handle("switch-tab", (_event, sandboxId: string) => {
+  tabManager.switchToTab(sandboxId);
+});
+
+// IPC: renderer requests tab close
+ipcMain.handle("close-tab", (_event, sandboxId: string) => {
+  tabManager.closeTab(sandboxId);
+});
+
+// IPC: list tabs
+ipcMain.handle("list-tabs", () => {
+  return tabManager.getAllTabs().map((t) => ({
+    id: t.id,
+    kind: t.kind,
+    title: t.title,
+  }));
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -46,6 +72,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  tabManager.setMainWindow(mainWindow);
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
