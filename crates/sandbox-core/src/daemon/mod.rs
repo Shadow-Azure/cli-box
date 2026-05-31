@@ -49,6 +49,28 @@ pub struct DaemonState {
     pub started_at: Instant,
 }
 
+impl DaemonState {
+    /// Remove sandboxes whose PTY process is no longer running.
+    pub fn cleanup_dead_sandboxes(&mut self) -> Vec<String> {
+        let mut removed = Vec::new();
+        self.sandboxes.retain(|id, sb| {
+            if let Some(pty_pid) = sb.pty_pid {
+                let alive = unsafe { libc::kill(pty_pid as i32, 0) == 0 };
+                if !alive {
+                    tracing::info!("Cleaning up dead sandbox {id} (pty_pid={pty_pid})");
+                    // Update registry
+                    let registry = InstanceRegistry::default();
+                    let _ = registry.update_status(id, InstanceStatus::Stopped);
+                    removed.push(id.clone());
+                    return false;
+                }
+            }
+            true
+        });
+        removed
+    }
+}
+
 /// Daemon info persisted to `~/.sandbox/daemon.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonInfo {
@@ -75,6 +97,11 @@ struct CreateSandboxRequest {
 #[derive(Deserialize)]
 struct PtyWriteRequest {
     data: String,
+}
+
+#[derive(Deserialize)]
+pub struct SetWindowIdRequest {
+    pub window_id: u32,
 }
 
 #[derive(Serialize)]
@@ -223,6 +250,7 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
         .route("/sandbox/{id}/ui/inspect", get(ui_inspect_by_id_handler))
         .route("/sandbox/{id}/ui/find", post(ui_find_handler))
         .route("/sandbox/{id}/ui/value", get(ui_value_handler))
+        .route("/sandbox/{id}/window", post(set_window_id_handler))
         .route("/shutdown", post(shutdown_handler))
         .layer(cors)
         .with_state(state)
@@ -666,6 +694,26 @@ async fn ui_value_handler(
     Ok(Json(UiValueResponse { value: result? }))
 }
 
+/// Set the window_id for a sandbox (called by Electron after window creation).
+async fn set_window_id_handler(
+    Path(id): Path<String>,
+    State(state): State<Arc<Mutex<DaemonState>>>,
+    Json(req): Json<SetWindowIdRequest>,
+) -> Result<StatusCode, AppError> {
+    let mut s = state.lock().await;
+    let sandbox = s
+        .sandboxes
+        .get_mut(&id)
+        .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
+    sandbox.window_id = Some(req.window_id);
+    tracing::info!("Set window_id={} for sandbox {}", req.window_id, id);
+
+    // Update instance registry file
+    let registry = InstanceRegistry::default();
+    let _ = registry.update_window_id(&id, req.window_id);
+    Ok(StatusCode::OK)
+}
+
 async fn shutdown_handler() -> Json<serde_json::Value> {
     tracing::info!("Daemon shutdown requested via HTTP");
     let path = daemon_json_path();
@@ -696,7 +744,7 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         started_at: Instant::now(),
     }));
 
-    let router = build_daemon_router(state);
+    let router = build_daemon_router(state.clone());
 
     // Ctrl-C handler: clean up daemon.json
     let ctrlc_path = daemon_json_path();
@@ -705,6 +753,20 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Ctrl-C received, cleaning up");
         let _ = std::fs::remove_file(&ctrlc_path);
         std::process::exit(0);
+    });
+
+    // Periodic cleanup of dead sandboxes
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let mut s = cleanup_state.lock().await;
+            let removed = s.cleanup_dead_sandboxes();
+            if !removed.is_empty() {
+                tracing::info!("Cleaned up {} dead sandboxes: {:?}", removed.len(), removed);
+            }
+        }
     });
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;

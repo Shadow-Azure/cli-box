@@ -307,6 +307,24 @@ pub async fn daemon_ui_value(sandbox_id: &str, element_id: &str) -> Result<serde
     Ok(resp.json().await?)
 }
 
+/// Set the window_id for a sandbox via the daemon HTTP API.
+pub async fn daemon_set_window_id(sandbox_id: &str, window_id: u32) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .post(format!("{base}/sandbox/{sandbox_id}/window"))
+        .json(&serde_json::json!({ "window_id": window_id }))
+        .send()
+        .await
+        .with_context(|| "set_window_id request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("set_window_id failed (HTTP {status}): {text}");
+    }
+    Ok(())
+}
+
 fn reqwest_client() -> reqwest::Client {
     reqwest::ClientBuilder::new()
         .no_proxy()
