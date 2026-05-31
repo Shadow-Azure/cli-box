@@ -301,13 +301,16 @@ async fn create_sandbox_handler(
                 args: req.args.clone(),
             };
 
+            // Best-effort: discover Electron window for screenshots
+            let window_id = ScreenCapture::find_window_by_title("System Test Sandbox").ok();
+
             let managed = ManagedSandbox {
                 id: id.clone(),
                 kind,
                 status: InstanceStatus::Running,
                 port: 0, // daemon owns the port, sandbox does not have its own
                 pty_pid: Some(info.pid),
-                window_id: None,
+                window_id,
             };
 
             // Register in file-system registry
@@ -327,7 +330,7 @@ async fn create_sandbox_handler(
             Ok(Json(CreateSandboxResponse {
                 sandbox_id: id,
                 pty_pid: Some(info.pid),
-                window_id: None,
+                window_id,
             }))
         }
         "app" => {
@@ -765,6 +768,33 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             let removed = s.cleanup_dead_sandboxes();
             if !removed.is_empty() {
                 tracing::info!("Cleaned up {} dead sandboxes: {:?}", removed.len(), removed);
+            }
+        }
+    });
+
+    // Auto-discover Electron window ID for screenshots
+    let discovery_state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let result = tokio::task::spawn_blocking(|| {
+            ScreenCapture::find_window_by_title("System Test Sandbox")
+        })
+        .await;
+        match result {
+            Ok(Ok(window_id)) => {
+                tracing::info!("Discovered Electron window_id={}", window_id);
+                let mut s = discovery_state.lock().await;
+                for (_, sb) in s.sandboxes.iter_mut() {
+                    if sb.window_id.is_none() {
+                        sb.window_id = Some(window_id);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Could not discover Electron window: {e}");
+            }
+            Err(e) => {
+                tracing::warn!("Window discovery task panicked: {e}");
             }
         }
     });
