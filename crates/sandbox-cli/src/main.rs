@@ -198,6 +198,9 @@ enum Commands {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+
+    /// Start MCP stdio server for agent integration
+    McpServe,
 }
 
 #[tokio::main]
@@ -277,6 +280,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Diff { a, b, threshold, output } => {
             cmd_diff(&a, &b, threshold, output.as_ref())?;
+        }
+        Commands::McpServe => {
+            run_mcp_server().await?;
         }
     }
 
@@ -1122,6 +1128,219 @@ fn cmd_diff(a: &PathBuf, b: &PathBuf, threshold: u8, output: Option<&PathBuf>) -
         println!("Diff image saved to: {}", out_path.display());
     }
     Ok(())
+}
+
+// ── MCP stdio server ────────────────────────────────────
+
+fn mcp_tools() -> serde_json::Value {
+    serde_json::json!({
+        "tools": [
+            {
+                "name": "list_sandboxes",
+                "description": "List all active sandbox instances",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "start_sandbox",
+                "description": "Start a new sandbox with a CLI command",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Command to run (e.g., 'zsh', 'claude')" },
+                        "args": { "type": "array", "items": { "type": "string" }, "description": "Command arguments" }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "close_sandbox",
+                "description": "Close a sandbox by ID",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" }
+                    },
+                    "required": ["sandbox_id"]
+                }
+            },
+            {
+                "name": "screenshot_sandbox",
+                "description": "Take a screenshot of a sandbox (returns base64 PNG)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" }
+                    },
+                    "required": ["sandbox_id"]
+                }
+            },
+            {
+                "name": "type_text",
+                "description": "Type text into a sandbox PTY",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" },
+                        "text": { "type": "string" }
+                    },
+                    "required": ["sandbox_id", "text"]
+                }
+            },
+            {
+                "name": "press_key",
+                "description": "Press a key in a sandbox",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" },
+                        "key": { "type": "string", "description": "Key name (Return, Tab, Escape, etc.)" },
+                        "modifiers": { "type": "array", "items": { "type": "string" } }
+                    },
+                    "required": ["sandbox_id", "key"]
+                }
+            },
+            {
+                "name": "inspect_ui",
+                "description": "Inspect the UI tree of a sandbox window",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" }
+                    },
+                    "required": ["sandbox_id"]
+                }
+            }
+        ]
+    })
+}
+
+async fn run_mcp_server() -> anyhow::Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let msg: serde_json::Value = serde_json::from_str(&line)?;
+        let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned();
+        let params = msg
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+
+        let result = match method {
+            "initialize" => serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "sandbox-mcp", "version": "0.1.0" }
+            }),
+            "tools/list" => mcp_tools(),
+            "tools/call" => {
+                let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+                handle_mcp_tool(tool_name, &args).await
+            }
+            _ => {
+                serde_json::json!({ "error": { "code": -32601, "message": "Method not found" } })
+            }
+        };
+
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        });
+        writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+        stdout.flush()?;
+    }
+    Ok(())
+}
+
+async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    let result: anyhow::Result<serde_json::Value> = async {
+        match name {
+            "list_sandboxes" => {
+                let list = client::daemon_list_sandboxes().await?;
+                Ok(serde_json::to_value(list)?)
+            }
+            "start_sandbox" => {
+                let cmd = args["command"].as_str().unwrap_or("zsh");
+                let cmd_args: Vec<String> = args["args"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let result =
+                    client::daemon_create_sandbox("cli", Some(cmd), &cmd_args, None, None).await?;
+                Ok(serde_json::to_value(result)?)
+            }
+            "close_sandbox" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                client::daemon_close(id).await?;
+                Ok(serde_json::json!({ "closed": id }))
+            }
+            "screenshot_sandbox" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                let png = client::daemon_screenshot(id).await?;
+                let b64 = base64_encode(&png);
+                Ok(serde_json::json!({ "sandbox_id": id, "image_base64": b64 }))
+            }
+            "type_text" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                let text = args["text"].as_str().unwrap_or("");
+                client::daemon_pty_write(id, text).await?;
+                Ok(serde_json::json!({ "typed": text }))
+            }
+            "press_key" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                let key = args["key"].as_str().unwrap_or("Return");
+                let mods: Vec<String> = args["modifiers"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                client::daemon_key(id, key, &mods).await?;
+                Ok(serde_json::json!({ "pressed": key }))
+            }
+            "inspect_ui" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                let tree = client::daemon_ui_inspect(id).await?;
+                Ok(serde_json::to_value(tree)?)
+            }
+            _ => Ok(serde_json::json!({ "error": format!("Unknown tool: {name}") })),
+        }
+    }
+    .await;
+
+    match result {
+        Ok(value) => serde_json::json!({
+            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&value).unwrap_or_default() }]
+        }),
+        Err(e) => serde_json::json!({
+            "content": [{ "type": "text", "text": format!("Error: {e}") }],
+            "isError": true
+        }),
+    }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
 // ── Helpers ─────────────────────────────────────────────

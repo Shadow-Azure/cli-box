@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Check if debug logging is enabled via SANDBOX_LOGGER_LEVEL=debug
 fn debug_enabled() -> bool {
@@ -41,7 +41,7 @@ pub struct DaemonHealthResponse {
     pub sandboxes: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DaemonSandbox {
     pub id: String,
     pub kind: sandbox_core::instance::InstanceKind,
@@ -51,7 +51,7 @@ pub struct DaemonSandbox {
     pub window_id: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CreateSandboxResponse {
     pub sandbox_id: String,
     pub pty_pid: Option<u32>,
