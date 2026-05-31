@@ -1,42 +1,42 @@
 /**
  * Daemon API client for Electron renderer.
- * Port comes from URL param (set by tab-manager when creating the WebContentsView).
+ * Connects to sandbox-daemon HTTP/WebSocket API.
  */
 
-function getDaemonPort(): number {
-  const params = new URLSearchParams(window.location.search);
-  const p = params.get("daemon_port");
-  return p ? Number(p) : 15801;
+let _port = 15801;
+
+export function getDaemonPort(): number {
+  return _port;
 }
 
-function getSandboxId(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("sandbox_id") || "";
+export function setDaemonPort(port: number) {
+  _port = port;
 }
 
-function getKind(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("kind") || "cli";
+export function getBaseUrl(): string {
+  return `http://127.0.0.1:${_port}`;
 }
 
-function getTitle(): string {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("title") || "";
+export interface SandboxInfo {
+  id: string;
+  kind: { type: string; detail: { command: string; args: string[] } };
+  status: { type: string };
+  pty_pid: number | null;
+  port: number;
 }
 
-const PORT = getDaemonPort();
-const BASE = `http://127.0.0.1:${PORT}`;
-export { PORT, getSandboxId, getKind, getTitle };
-
-export interface PtyConnection {
-  onOutput: (cb: (data: string | Uint8Array) => void) => () => void;
-  sendInput: (data: string) => void;
-  resize: (cols: number, rows: number) => void;
-  close: () => void;
+export async function fetchSandboxList(): Promise<SandboxInfo[]> {
+  const res = await fetch(`${getBaseUrl()}/sandbox/list`);
+  return res.json();
 }
 
-export function connectPty(ptyPid: number): PtyConnection {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/sandbox/${getSandboxId()}/pty/ws/${ptyPid}`);
+export async function fetchSandboxInfo(id: string): Promise<SandboxInfo | undefined> {
+  const list = await fetchSandboxList();
+  return list.find((sb) => sb.id === id);
+}
+
+export function connectPty(sandboxId: string, ptyPid: number): PtyConnection {
+  const ws = new WebSocket(`ws://127.0.0.1:${_port}/sandbox/${sandboxId}/pty/ws/${ptyPid}`);
   ws.binaryType = "arraybuffer";
   const outputListeners: ((data: string | Uint8Array) => void)[] = [];
 
@@ -70,13 +70,9 @@ export function connectPty(ptyPid: number): PtyConnection {
   };
 }
 
-export async function fetchSandboxInfo(): Promise<{
-  id: string;
-  kind: { type: string; detail: { command: string; args: string[] } };
-  status: { type: string };
-  pty_pid: number | null;
-}> {
-  const res = await fetch(`${BASE}/sandbox/list`);
-  const list = await res.json();
-  return list.find((sb: { id: string }) => sb.id === getSandboxId());
+export interface PtyConnection {
+  onOutput: (cb: (data: string | Uint8Array) => void) => () => void;
+  sendInput: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  close: () => void;
 }

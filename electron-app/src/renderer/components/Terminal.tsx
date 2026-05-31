@@ -5,11 +5,12 @@ import { connectPty } from "../api";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
+  sandboxId: string;
   ptyPid: number;
   onReady?: (cols: number, rows: number) => void;
 }
 
-export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
+export default function SandboxTerminal({ sandboxId, ptyPid, onReady }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -23,25 +24,49 @@ export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: "bar",
-      fontSize: 14,
+      fontSize: 13,
       fontFamily: '"SF Mono", "Menlo", "Monaco", monospace',
       fontWeight: "400",
       fontWeightBold: "600",
       scrollback: 10000,
+      lineHeight: 1.4,
+      letterSpacing: 0,
       theme: {
-        background: "#1a1b26",
-        foreground: "#a9b1d6",
-        cursor: "#c0caf5",
-        selectionBackground: "#33467c",
+        background: "#1a1a1a",
+        foreground: "#cccccc",
+        cursor: "#ffffff",
+        cursorAccent: "#1a1a1a",
+        selectionBackground: "#264f78",
+        selectionForeground: "#ffffff",
+        black: "#1a1a1a",
+        red: "#ff6b6b",
+        green: "#69db7c",
+        yellow: "#ffd43b",
+        blue: "#74c0fc",
+        magenta: "#da77f2",
+        cyan: "#66d9e8",
+        white: "#cccccc",
+        brightBlack: "#666666",
+        brightRed: "#ff8787",
+        brightGreen: "#8ce99a",
+        brightYellow: "#ffe066",
+        brightBlue: "#a5d8ff",
+        brightMagenta: "#e599f7",
+        brightCyan: "#99e9f2",
+        brightWhite: "#ffffff",
       },
+      allowTransparency: true,
     });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
-    fitAddon.fit();
 
-    onReady?.(term.cols, term.rows);
+    // Fit after a small delay to ensure DOM is ready
+    requestAnimationFrame(() => {
+      fitAddon.fit();
+      onReady?.(term.cols, term.rows);
+    });
 
     term.onData((data) => {
       connRef.current?.sendInput(data);
@@ -68,7 +93,7 @@ export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
     connRef.current?.close();
     connRef.current = null;
 
-    const conn = connectPty(ptyPid);
+    const conn = connectPty(sandboxId, ptyPid);
     connRef.current = conn;
 
     const decoder = new TextDecoder();
@@ -76,7 +101,6 @@ export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
       const term = xtermRef.current;
       if (!term) return;
       const writeData = typeof data === "string" ? data : decoder.decode(data as Uint8Array);
-      // Standard term.write() — Chromium handles rendering correctly
       term.write(writeData);
     });
 
@@ -90,7 +114,7 @@ export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
       conn.close();
       connRef.current = null;
     };
-  }, [ptyPid]);
+  }, [sandboxId, ptyPid]);
 
   const containerRef = useCallback((node: HTMLDivElement | null) => {
     if (node) {
@@ -99,8 +123,8 @@ export default function SandboxTerminal({ ptyPid, onReady }: TerminalProps) {
   }, []);
 
   return (
-    <div ref={containerRef} className="w-full h-full relative">
-      <div ref={terminalRef} className="w-full h-full" />
+    <div ref={containerRef} className="terminal-container">
+      <div ref={terminalRef} style={{ width: "100%", height: "100%" }} />
     </div>
   );
 }

@@ -1,0 +1,399 @@
+/* System Test Sandbox — macOS Native Theme */
+
+:root {
+  /* Dark mode (default) */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252525;
+  --bg-tertiary: #2d2d2d;
+  --bg-hover: #353535;
+  --bg-active: #3a3a3a;
+  --bg-terminal: #1a1a1a;
+
+  --text-primary: #ffffff;
+  --text-secondary: #999999;
+  --text-tertiary: #666666;
+
+  --border-primary: #3a3a3a;
+  --border-secondary: #2a2a2a;
+
+  --accent: #007aff;
+  --accent-hover: #0066d6;
+  --accent-text: #ffffff;
+
+  --success: #34c759;
+  --warning: #ff9500;
+  --error: #ff3b30;
+
+  --tab-bg: #2d2d2d;
+  --tab-bg-active: #1e1e1e;
+  --tab-text: #999999;
+  --tab-text-active: #ffffff;
+  --tab-border: #3a3a3a;
+
+  --titlebar-bg: #2d2d2d;
+  --titlebar-text: #ffffff;
+
+  --statusbar-bg: #252525;
+  --statusbar-text: #999999;
+
+  --traffic-light-red: #ff5f56;
+  --traffic-light-yellow: #ffbd2e;
+  --traffic-light-green: #27c93f;
+
+  color-scheme: dark;
+}
+
+:root.light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #e5e5e5;
+  --bg-hover: #eeeeee;
+  --bg-active: #e0e0e0;
+  --bg-terminal: #fafafa;
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --text-tertiary: #999999;
+
+  --border-primary: #d0d0d0;
+  --border-secondary: #e5e5e5;
+
+  --accent: #007aff;
+  --accent-hover: #0066d6;
+  --accent-text: #ffffff;
+
+  --success: #34c759;
+  --warning: #ff9500;
+  --error: #ff3b30;
+
+  --tab-bg: #f0f0f0;
+  --tab-bg-active: #ffffff;
+  --tab-text: #666666;
+  --tab-text-active: #1a1a1a;
+  --tab-border: #d0d0d0;
+
+  --titlebar-bg: #f5f5f5;
+  --titlebar-text: #1a1a1a;
+
+  --statusbar-bg: #f0f0f0;
+  --statusbar-text: #666666;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(.dark) {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-tertiary: #e5e5e5;
+    --bg-hover: #eeeeee;
+    --bg-active: #e0e0e0;
+    --bg-terminal: #fafafa;
+
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --text-tertiary: #999999;
+
+    --border-primary: #d0d0d0;
+    --border-secondary: #e5e5e5;
+
+    --tab-bg: #f0f0f0;
+    --tab-bg-active: #ffffff;
+    --tab-text: #666666;
+    --tab-text-active: #1a1a1a;
+    --tab-border: #d0d0d0;
+
+    --titlebar-bg: #f5f5f5;
+    --titlebar-text: #1a1a1a;
+
+    --statusbar-bg: #f0f0f0;
+    --statusbar-text: #666666;
+
+    color-scheme: light;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Title Bar */
+.titlebar {
+  -webkit-app-region: drag;
+  height: 38px;
+  background: var(--titlebar-bg);
+  border-bottom: 1px solid var(--border-primary);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  user-select: none;
+}
+
+.titlebar-traffic-lights {
+  width: 68px;
+  flex-shrink: 0;
+}
+
+.titlebar-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.titlebar-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--titlebar-text);
+  opacity: 0.8;
+}
+
+.titlebar-actions {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 68px;
+  justify-content: flex-end;
+}
+
+/* Tab Bar */
+.tab-bar {
+  height: 36px;
+  background: var(--tab-bg);
+  border-bottom: 1px solid var(--border-primary);
+  display: flex;
+  align-items: flex-end;
+  padding: 0 8px;
+  gap: 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-item {
+  -webkit-app-region: no-drag;
+  height: 30px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--tab-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.tab-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab-item.active {
+  background: var(--tab-bg-active);
+  color: var(--tab-text-active);
+  border: 1px solid var(--tab-border);
+  border-bottom: 1px solid var(--tab-bg-active);
+  margin-bottom: -1px;
+}
+
+.tab-item .tab-icon {
+  font-size: 14px;
+}
+
+.tab-item .tab-close {
+  -webkit-app-region: no-drag;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.tab-item:hover .tab-close,
+.tab-item.active .tab-close {
+  opacity: 1;
+}
+
+.tab-item .tab-close:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.tab-add {
+  -webkit-app-region: no-drag;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.15s ease;
+  margin-left: 4px;
+}
+
+.tab-add:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-container {
+  flex: 1;
+  background: var(--bg-terminal);
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  padding: 8px;
+}
+
+/* Status Bar */
+.statusbar {
+  height: 24px;
+  background: var(--statusbar-bg);
+  border-top: 1px solid var(--border-primary);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--statusbar-text);
+  gap: 16px;
+}
+
+.statusbar-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.statusbar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.statusbar-dot.warning {
+  background: var(--warning);
+}
+
+.statusbar-dot.error {
+  background: var(--error);
+}
+
+.statusbar-spacer {
+  flex: 1;
+}
+
+/* Empty State */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-tertiary);
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+.empty-state-text {
+  font-size: 14px;
+}
+
+.empty-state-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+/* Loading State */
+.loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.loading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border-primary);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Theme Toggle Button */
+.theme-toggle {
+  -webkit-app-region: no-drag;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
