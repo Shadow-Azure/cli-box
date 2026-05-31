@@ -70,6 +70,40 @@ export function connectPty(sandboxId: string, ptyPid: number): PtyConnection {
   };
 }
 
+export async function createSandbox(
+  mode: "cli" | "app",
+  command: string,
+  args: string[] = []
+): Promise<{ sandbox_id: string; pty_pid: number | null; window_id: number | null }> {
+  const res = await fetch(`${getBaseUrl()}/sandbox/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, command, args }),
+  });
+  if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+  return res.json();
+}
+
+export async function takeScreenshot(sandboxId: string): Promise<Blob> {
+  const res = await fetch(`${getBaseUrl()}/sandbox/${sandboxId}/screenshot`);
+  if (!res.ok) throw new Error(`Screenshot failed: ${res.status}`);
+  return res.blob();
+}
+
+export async function closeSandbox(sandboxId: string): Promise<void> {
+  const res = await fetch(`${getBaseUrl()}/sandbox/${sandboxId}/close`, { method: "POST" });
+  if (!res.ok) throw new Error(`Close failed: ${res.status}`);
+}
+
+export async function setWindowId(sandboxId: string, windowId: number): Promise<void> {
+  const res = await fetch(`${getBaseUrl()}/sandbox/${sandboxId}/window`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ window_id: windowId }),
+  });
+  if (!res.ok) throw new Error(`Set window_id failed: ${res.status}`);
+}
+
 export interface PtyConnection {
   onOutput: (cb: (data: string | Uint8Array) => void) => () => void;
   sendInput: (data: string) => void;

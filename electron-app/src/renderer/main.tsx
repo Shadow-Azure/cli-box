@@ -6,7 +6,9 @@ import {
   fetchSandboxList,
   setDaemonPort,
   getDaemonPort,
+  createSandbox,
 } from "./api";
+import AppPanel from "./components/AppPanel";
 import "./styles.css";
 
 declare global {
@@ -37,6 +39,9 @@ function App() {
     return (localStorage.getItem("theme") as Theme) || "system";
   });
   const [connected, setConnected] = useState(false);
+  const [showNewDialog, setShowNewDialog] = useState(false);
+  const [newSandboxCmd, setNewSandboxCmd] = useState("");
+  const [newSandboxMode, setNewSandboxMode] = useState<"cli" | "app">("cli");
   const refreshTimer = useRef<ReturnType<typeof setInterval>>();
 
   // Apply theme
@@ -167,9 +172,7 @@ function App() {
         ))}
         <button
           className="tab-add"
-          onClick={() => {
-            // TODO: open new sandbox dialog
-          }}
+          onClick={() => setShowNewDialog(true)}
           title="New sandbox"
         >
           +
@@ -178,13 +181,19 @@ function App() {
 
       {/* Terminal Area */}
       {activeTab ? (
-        <div className="terminal-container">
-          <SandboxTerminal
-            key={activeTab.id}
-            sandboxId={activeTab.id}
-            ptyPid={activeTab.sandbox.pty_pid!}
-          />
-        </div>
+        activeTab.kind === "app" ? (
+          <div className="terminal-container">
+            <AppPanel sandboxId={activeTab.id} />
+          </div>
+        ) : (
+          <div className="terminal-container">
+            <SandboxTerminal
+              key={activeTab.id}
+              sandboxId={activeTab.id}
+              ptyPid={activeTab.sandbox.pty_pid!}
+            />
+          </div>
+        )
       ) : (
         <div className="empty-state">
           <div className="empty-state-icon">⌘</div>
@@ -214,6 +223,54 @@ function App() {
           <span>{theme === "system" ? "Auto" : theme === "dark" ? "Dark" : "Light"}</span>
         </div>
       </div>
+
+      {/* New Sandbox Dialog */}
+      {showNewDialog && (
+        <div className="dialog-overlay" onClick={() => setShowNewDialog(false)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-title">New Sandbox</div>
+            <div className="dialog-field">
+              <label>Mode:</label>
+              <select
+                value={newSandboxMode}
+                onChange={(e) => setNewSandboxMode(e.target.value as "cli" | "app")}
+              >
+                <option value="cli">CLI</option>
+                <option value="app">App</option>
+              </select>
+            </div>
+            <div className="dialog-field">
+              <label>{newSandboxMode === "cli" ? "Command:" : "App path:"}</label>
+              <input
+                type="text"
+                value={newSandboxCmd}
+                onChange={(e) => setNewSandboxCmd(e.target.value)}
+                placeholder={newSandboxMode === "cli" ? "zsh" : "/Applications/TextEdit.app"}
+                autoFocus
+              />
+            </div>
+            <div className="dialog-actions">
+              <button onClick={() => setShowNewDialog(false)}>Cancel</button>
+              <button
+                className="primary"
+                onClick={async () => {
+                  if (!newSandboxCmd.trim()) return;
+                  try {
+                    await createSandbox(newSandboxMode, newSandboxCmd);
+                    setShowNewDialog(false);
+                    setNewSandboxCmd("");
+                    refreshSandboxes();
+                  } catch (e) {
+                    console.error("Failed to create sandbox:", e);
+                  }
+                }}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
