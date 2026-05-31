@@ -1073,7 +1073,7 @@ fn find_electron_binary() -> anyhow::Result<PathBuf> {
     let electron_name = "System Test Sandbox";
     let app_bundle = exe_dir.join(format!("{electron_name}.app"));
     if app_bundle.exists() {
-        return Ok(app_bundle.join("Contents/MacOS/system-test-sandbox"));
+        return Ok(app_bundle.join("Contents/MacOS/System Test Sandbox"));
     }
 
     // Dev mode: check dist/electron
