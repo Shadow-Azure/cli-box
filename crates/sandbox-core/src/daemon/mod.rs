@@ -531,7 +531,7 @@ async fn spawn_app_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
     Path(id): Path<String>,
     Json(req): Json<SpawnAppRequest>,
-) -> Result<Json<crate::process::ProcessInfo>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     // Verify sandbox exists
     {
         let s = state.lock().await;
@@ -541,12 +541,30 @@ async fn spawn_app_handler(
     }
 
     let app_path = req.path.clone();
-    let info = tokio::task::spawn_blocking(move || ProcessManager::spawn_app(&app_path))
-        .await
-        .map_err(|e| AppError::Process(format!("spawn_app panicked: {e}")))??;
+    let (info, window_id) =
+        tokio::task::spawn_blocking(move || ProcessManager::spawn_app_with_window(&app_path))
+            .await
+            .map_err(|e| AppError::Process(format!("spawn_app panicked: {e}")))??;
 
-    tracing::info!("Spawned app in sandbox {}: {}", id, req.path);
-    Ok(Json(info))
+    // Update sandbox window_id if discovered
+    if let Some(wid) = window_id {
+        let mut s = state.lock().await;
+        if let Some(sb) = s.sandboxes.get_mut(&id) {
+            sb.window_id = Some(wid);
+        }
+    }
+
+    tracing::info!(
+        "Spawned app in sandbox {}: {} (window_id={:?})",
+        id,
+        req.path,
+        window_id
+    );
+    Ok(Json(serde_json::json!({
+        "pid": info.pid,
+        "name": info.name,
+        "window_id": window_id,
+    })))
 }
 
 async fn windows_handler(
