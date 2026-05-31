@@ -14,6 +14,7 @@ export default function SandboxTerminal({ sandboxId, ptyPid, onReady }: Terminal
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const fitFnRef = useRef<(() => void) | null>(null);
   const connRef = useRef<ReturnType<typeof connectPty> | null>(null);
 
   // Initialize xterm.js
@@ -72,14 +73,19 @@ export default function SandboxTerminal({ sandboxId, ptyPid, onReady }: Terminal
       connRef.current?.sendInput(data);
     });
 
-    const handleResize = () => {
+    const doFit = () => {
       fitAddon.fit();
       connRef.current?.resize(term.cols, term.rows);
+    };
+
+    const handleResize = () => {
+      doFit();
     };
     window.addEventListener("resize", handleResize);
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+    fitFnRef.current = doFit;
 
     return () => {
       window.removeEventListener("resize", handleResize);
@@ -118,7 +124,7 @@ export default function SandboxTerminal({ sandboxId, ptyPid, onReady }: Terminal
 
   const containerRef = useCallback((node: HTMLDivElement | null) => {
     if (node) {
-      requestAnimationFrame(() => fitAddonRef.current?.fit());
+      requestAnimationFrame(() => fitFnRef.current?.());
     }
   }, []);
 
