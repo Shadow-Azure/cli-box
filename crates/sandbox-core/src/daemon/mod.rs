@@ -50,12 +50,15 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    /// Remove sandboxes whose PTY process is no longer running.
+    /// Remove sandboxes whose PTY session is no longer alive.
     pub fn cleanup_dead_sandboxes(&mut self) -> Vec<String> {
         let mut removed = Vec::new();
         self.sandboxes.retain(|id, sb| {
             if let Some(pty_pid) = sb.pty_pid {
-                let alive = unsafe { libc::kill(pty_pid as i32, 0) == 0 };
+                // Use ProcessManager to check if the PTY session is still alive.
+                // pty_pid is the internal tracked_id, not an OS PID, so we can't
+                // use libc::kill() — it would check a non-existent OS process.
+                let alive = ProcessManager::is_session_alive(pty_pid);
                 if !alive {
                     tracing::info!("Cleaning up dead sandbox {id} (pty_pid={pty_pid})");
                     // Update registry
