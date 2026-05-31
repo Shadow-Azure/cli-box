@@ -3,10 +3,13 @@
 pub mod automation;
 pub mod capture;
 pub mod daemon;
+pub mod diff;
 pub mod instance;
 pub mod logging;
+pub mod player;
 pub mod process;
 pub mod pty_store;
+pub mod recorder;
 pub mod sandbox;
 pub mod server;
 
