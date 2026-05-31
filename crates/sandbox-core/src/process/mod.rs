@@ -19,6 +19,11 @@ use {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub pid: u32,
+    /// Actual OS process ID (for PTY sessions, this is the child process PID).
+    /// For app spawns, this equals `pid`. For CLI PTY spawns, `pid` is the
+    /// internal tracked_id while `os_pid` is the real OS PID.
+    #[serde(default)]
+    pub os_pid: Option<u32>,
     pub name: String,
     pub path: Option<String>,
     pub is_running: bool,
@@ -99,6 +104,7 @@ impl ProcessManager {
         let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let info = ProcessInfo {
             pid: id,
+            os_pid: None, // `open` returns immediately; actual PID unknown
             name: app_name.clone(),
             path: Some(app_path.to_string()),
             is_running: true,
@@ -264,6 +270,7 @@ impl ProcessManager {
 
         Ok(ProcessInfo {
             pid: tracked_id,
+            os_pid: child_pid,
             name: command.to_string(),
             path: None,
             is_running: true,
@@ -296,12 +303,21 @@ impl ProcessManager {
             .iter()
             .map(|(id, s)| ProcessInfo {
                 pid: *id,
+                os_pid: Some(s.child_pid).filter(|&p| p != 0),
                 name: s.command.clone(),
                 path: None,
                 is_running: true,
             })
             .collect();
         Ok(processes)
+    }
+
+    /// Check if a PTY session with the given tracked PID is still alive.
+    pub fn is_session_alive(tracked_pid: u32) -> bool {
+        SESSIONS
+            .lock()
+            .map(|sessions| sessions.contains_key(&tracked_pid))
+            .unwrap_or(false)
     }
 
     /// Kill a process by tracked PID

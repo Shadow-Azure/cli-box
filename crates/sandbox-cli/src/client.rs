@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Check if debug logging is enabled via SANDBOX_LOGGER_LEVEL=debug
 fn debug_enabled() -> bool {
@@ -14,6 +14,323 @@ macro_rules! debug_log {
             eprintln!($($arg)*);
         }
     };
+}
+
+// ── Daemon discovery helpers ──────────────────────────────────
+
+/// Resolve the daemon port from `daemon.json`. Errors if daemon is not running.
+pub fn resolve_daemon_port() -> Result<u16> {
+    sandbox_core::daemon::find_running_daemon()
+        .with_context(|| "Sandbox daemon is not running. Start it with: sandbox start <command>")
+}
+
+/// Returns `http://127.0.0.1:{port}` for the running daemon.
+pub fn daemon_base_url() -> Result<String> {
+    let port = resolve_daemon_port()?;
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+// ── Daemon API response types ─────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DaemonHealthResponse {
+    pub status: String,
+    pub version: String,
+    pub uptime_secs: u64,
+    pub sandboxes: usize,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DaemonSandbox {
+    pub id: String,
+    pub kind: sandbox_core::instance::InstanceKind,
+    pub status: sandbox_core::instance::InstanceStatus,
+    pub port: u16,
+    pub pty_pid: Option<u32>,
+    pub window_id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateSandboxResponse {
+    pub sandbox_id: String,
+    pub pty_pid: Option<u32>,
+    pub window_id: Option<u32>,
+}
+
+// ── Daemon API commands ───────────────────────────────────────
+
+/// Create a new sandbox via the daemon HTTP API.
+pub async fn daemon_create_sandbox(
+    mode: &str,
+    command: Option<&str>,
+    args: &[String],
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<CreateSandboxResponse> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let body = serde_json::json!({
+        "mode": mode,
+        "command": command,
+        "args": args,
+        "cols": cols,
+        "rows": rows,
+    });
+    let resp = client
+        .post(format!("{base}/sandbox/create"))
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| "Failed to connect to sandbox daemon")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon create failed (HTTP {status}): {text}");
+    }
+    let result: CreateSandboxResponse = resp.json().await?;
+    Ok(result)
+}
+
+/// List all sandboxes via the daemon HTTP API.
+pub async fn daemon_list_sandboxes() -> Result<Vec<DaemonSandbox>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/list"))
+        .send()
+        .await
+        .with_context(|| "Failed to connect to sandbox daemon")?;
+    let list: Vec<DaemonSandbox> = resp.json().await?;
+    Ok(list)
+}
+
+/// Take a screenshot of a sandbox via the daemon HTTP API. Returns PNG bytes.
+pub async fn daemon_screenshot(sandbox_id: &str) -> Result<Vec<u8>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/{sandbox_id}/screenshot"))
+        .send()
+        .await
+        .with_context(|| "screenshot request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("screenshot failed (HTTP {status}): {text}");
+    }
+    let bytes = resp.bytes().await?.to_vec();
+    Ok(bytes)
+}
+
+/// Click in a sandbox via the daemon HTTP API.
+pub async fn daemon_click(sandbox_id: &str, x: f64, y: f64, button: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/click"))
+        .json(&serde_json::json!({ "x": x, "y": y, "button": button }))
+        .send()
+        .await
+        .with_context(|| "click request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "click failed")?;
+    Ok(())
+}
+
+/// Type text in a sandbox via the daemon HTTP API.
+pub async fn daemon_type(sandbox_id: &str, text: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/type"))
+        .json(&serde_json::json!({ "text": text }))
+        .send()
+        .await
+        .with_context(|| "type request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "type failed")?;
+    Ok(())
+}
+
+/// Type text into a sandbox PTY via the daemon HTTP API.
+pub async fn daemon_pty_write(sandbox_id: &str, data: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/pty/write"))
+        .json(&serde_json::json!({ "data": data }))
+        .send()
+        .await
+        .with_context(|| "pty_write request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "pty_write failed")?;
+    Ok(())
+}
+
+/// Press a key in a sandbox via the daemon HTTP API.
+pub async fn daemon_key(sandbox_id: &str, key: &str, modifiers: &[String]) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/input/key"))
+        .json(&serde_json::json!({ "key": key, "modifiers": modifiers }))
+        .send()
+        .await
+        .with_context(|| "key request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "key failed")?;
+    Ok(())
+}
+
+/// Close a sandbox via the daemon HTTP API.
+pub async fn daemon_close(sandbox_id: &str) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/sandbox/{sandbox_id}/close"))
+        .send()
+        .await
+        .with_context(|| "close request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "close failed")?;
+    Ok(())
+}
+
+/// Shut down the daemon via HTTP.
+pub async fn daemon_shutdown() -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    client
+        .post(format!("{base}/shutdown"))
+        .send()
+        .await
+        .with_context(|| "shutdown request to daemon failed")?
+        .error_for_status()
+        .with_context(|| "daemon shutdown failed")?;
+    Ok(())
+}
+
+/// Inspect a sandbox via the daemon API. Returns sandbox info from the daemon's in-memory state.
+pub async fn daemon_inspect(sandbox_id: &str) -> Result<DaemonSandbox> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/list"))
+        .send()
+        .await
+        .with_context(|| "Failed to fetch sandbox list from daemon")?;
+    let sandboxes: Vec<DaemonSandbox> = resp.json().await?;
+    sandboxes
+        .into_iter()
+        .find(|sb| sb.id == sandbox_id)
+        .with_context(|| format!("Sandbox '{sandbox_id}' not found in daemon"))
+}
+
+/// List processes in a sandbox via the daemon HTTP API.
+pub async fn daemon_processes(sandbox_id: &str) -> Result<Vec<ProcessInfo>> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/{sandbox_id}/processes"))
+        .send()
+        .await
+        .with_context(|| "processes request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("processes failed (HTTP {status}): {text}");
+    }
+    let processes: Vec<ProcessInfo> = resp.json().await?;
+    Ok(processes)
+}
+
+/// Inspect UI tree of a sandbox window via the daemon HTTP API.
+pub async fn daemon_ui_inspect(sandbox_id: &str) -> Result<serde_json::Value> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/sandbox/{sandbox_id}/ui/inspect"))
+        .send()
+        .await
+        .with_context(|| "ui/inspect request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("ui/inspect failed (HTTP {status}): {text}");
+    }
+    Ok(resp.json().await?)
+}
+
+/// Find UI elements by role/title in a sandbox window.
+pub async fn daemon_ui_find(
+    sandbox_id: &str,
+    role: &str,
+    title: Option<&str>,
+) -> Result<serde_json::Value> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let mut body = serde_json::json!({ "role": role });
+    if let Some(t) = title {
+        body["title"] = serde_json::json!(t);
+    }
+    let resp = client
+        .post(format!("{base}/sandbox/{sandbox_id}/ui/find"))
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| "ui/find request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("ui/find failed (HTTP {status}): {text}");
+    }
+    Ok(resp.json().await?)
+}
+
+/// Get the value of a UI element by its element ID.
+pub async fn daemon_ui_value(sandbox_id: &str, element_id: &str) -> Result<serde_json::Value> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!(
+            "{base}/sandbox/{sandbox_id}/ui/value?element_id={element_id}"
+        ))
+        .send()
+        .await
+        .with_context(|| "ui/value request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("ui/value failed (HTTP {status}): {text}");
+    }
+    Ok(resp.json().await?)
+}
+
+/// Set the window_id for a sandbox via the daemon HTTP API.
+#[allow(dead_code)]
+pub async fn daemon_set_window_id(sandbox_id: &str, window_id: u32) -> Result<()> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .post(format!("{base}/sandbox/{sandbox_id}/window"))
+        .json(&serde_json::json!({ "window_id": window_id }))
+        .send()
+        .await
+        .with_context(|| "set_window_id request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("set_window_id failed (HTTP {status}): {text}");
+    }
+    Ok(())
+}
+
+fn reqwest_client() -> reqwest::Client {
+    reqwest::ClientBuilder::new()
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 #[derive(Debug, Deserialize)]

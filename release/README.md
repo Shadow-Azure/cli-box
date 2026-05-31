@@ -1,13 +1,14 @@
 # System Test Sandbox — Release v${VERSION}
 
-macOS 桌面自动化沙箱。通过 CLI 启动 Tauri 沙箱窗口，内置 xterm.js 终端运行命令行工具（如 Claude Code），支持截图和输入模拟。
+macOS 桌面自动化沙箱。通过 CLI 启动 Electron 沙箱窗口，内置 xterm.js 终端运行命令行工具（如 Claude Code），支持截图和输入模拟。
 
 ## 文件说明
 
 ```
 release/
 ├── sandbox                     # CLI 工具（命令行入口）
-├── System Test Sandbox.app/    # Tauri 沙箱 macOS 应用
+├── sandbox-daemon              # 守护进程（CLI 自动管理）
+├── System Test Sandbox.app/    # Electron 沙箱 macOS 应用
 └── README.md                   # 本文件
 ```
 
@@ -54,45 +55,43 @@ release/
 ### 截图
 
 \`\`\`bash
-# 自动发现沙箱窗口并截图（保存为 PNG）
-./sandbox screenshot -o screenshot.png
-
-# 指定窗口 ID 截图
-./sandbox screenshot --window-id 12345 -o screenshot.png
+# 截取指定沙箱窗口
+./sandbox screenshot --id <sandbox-id> -o screenshot.png
 \`\`\`
 
 ### 其他命令
 
 \`\`\`bash
-# 列出所有可见窗口
-./sandbox windows
+# 列出所有沙箱
+./sandbox list
+
+# 查看沙箱详情
+./sandbox inspect <sandbox-id>
 
 # 关闭沙箱
-./sandbox shutdown
+./sandbox close <sandbox-id>
 \`\`\`
 
 ### 示例工作流
 
 \`\`\`bash
-# 1. 启动 Claude Code
+# 1. 启动 Claude Code（自动打开 Electron 窗口）
 ./sandbox start claude
 
 # 2. 等待 Claude 启动（约 10 秒）
 sleep 10
 
 # 3. 截图查看状态
-./sandbox screenshot -o screenshot.png
+./sandbox screenshot --id <ID> -o screenshot.png
 
-# 4. 关闭沙箱
-./sandbox shutdown
-\`\`\`
+# 4. 启动另一个沙箱（自动创建新 Tab）
+./sandbox start zsh
 
-\`\`\`bash
-# 非交互式快速提问
-./sandbox start claude -- -p "用 Python 写一个 hello world"
-sleep 30
-./sandbox screenshot -o claude_response.png
-./sandbox shutdown
+# 5. 列出所有沙箱
+./sandbox list
+
+# 6. 关闭指定沙箱
+./sandbox close <ID>
 \`\`\`
 
 ## 三、架构
@@ -102,21 +101,24 @@ sandbox start claude
        │
        ▼
 CLI (sandbox)
-       │ spawn System Test Sandbox.app --mode=cli --cmd=claude
+       │ 1. 启动 sandbox-daemon（如未运行）
+       │ 2. 通过 HTTP 创建沙箱
+       │ 3. 启动 Electron 窗口（如未运行）
        ▼
-Tauri 沙箱窗口
-  ┌────────────────────────────────────────────┐
-  │  终端面板 (xterm.js)    │  Screenshot Preview │
-  │  ← Claude 运行在这里     │                     │
-  ├────────────────────────────────────────────┤
-  │  Control Panel: Screenshot / Spawn / Click  │
-  ├────────────────────────────────────────────┤
-  │  Status: Server :5801 | Processes: X | ...  │
-  └────────────────────────────────────────────┘
-       │ HTTP :5801
+sandbox-daemon (HTTP :15801)
+  - 管理 PTY 进程
+  - 提供截图/输入 API
+  - WebSocket PTY 终端
+       │
        ▼
-  内嵌 HTTP API (axum)
-  - /screenshot, /input/click, /pty/write, ...
+Electron 窗口 (Chromium)
+  ┌────────────────────────────────────┐
+  │  Tab: claude   Tab: zsh   Tab: ... │
+  ├────────────────────────────────────┤
+  │  xterm.js 终端                      │
+  │  ← PTY WebSocket 连接              │
+  │  标准 term.write() 渲染             │
+  └────────────────────────────────────┘
 \`\`\`
 
 ## 四、常见问题
@@ -131,8 +133,8 @@ A: 检查「辅助功能」权限是否已授予。
 A: 确保 \`System Test Sandbox.app\` 与 \`sandbox\` 在同一目录下。
 
 **Q: 沙箱窗口内终端空白？**
-A: 等待几秒让 Claude 启动，终端会自动连接 PTY 输出。
+A: 等待几秒让 CLI 工具启动，终端会自动连接 PTY 输出。
 
 ---
 
-**版本**: v${VERSION} | **构建时间**: 2026-05-30 03:34
+**版本**: v${VERSION} | **构建时间**: 2026-05-31 11:35
