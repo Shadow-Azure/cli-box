@@ -3,16 +3,16 @@ const config = {
   appId: "com.system-test-sandbox",
   productName: "System Test Sandbox",
   directories: {
-    output: "../../dist/electron",
+    output: "../dist/electron",
   },
   mac: {
     target: ["dmg"],
     category: "public.app-category.developer-tools",
   },
-  files: ["dist/**/*"],
+  files: ["out/**/*"],
   extraResources: [
     {
-      from: "../../target/release/sandbox-daemon",
+      from: "../target/release/sandbox-daemon",
       to: "sandbox-daemon",
     },
   ],

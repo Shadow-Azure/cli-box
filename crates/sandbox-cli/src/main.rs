@@ -377,17 +377,16 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     );
     println!("Daemon port: {port}");
 
-    // Ensure Electron is running
-    if !find_running_electron() {
-        if let Ok(electron_bin) = find_electron_binary() {
-            tracing::info!("[start] spawning Electron: {}", electron_bin.display());
-            let _child = Command::new(&electron_bin)
-                .spawn()
-                .context("Failed to launch Electron app")?;
-            tracing::info!("[start] Electron launched");
-        } else {
-            tracing::warn!("[start] Electron app not found, running in headless daemon mode");
-        }
+    // Spawn Electron — if already running, requestSingleInstanceLock triggers
+    // second-instance event which syncs sandboxes and creates tabs.
+    if let Ok(electron_bin) = find_electron_binary() {
+        tracing::info!("[start] spawning Electron: {}", electron_bin.display());
+        let _child = Command::new(&electron_bin)
+            .spawn()
+            .context("Failed to launch Electron app")?;
+        tracing::info!("[start] Electron launched");
+    } else {
+        tracing::warn!("[start] Electron app not found, running in headless daemon mode");
     }
 
     Ok(())
