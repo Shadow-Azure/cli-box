@@ -106,12 +106,16 @@ function createWindow() {
 
     mainWindow.webContents.send("window-closing");
 
-    // Wait for renderer response via IPC
+    // Wait for renderer response via IPC, with 5s timeout fallback
     const responsePromise = new Promise<string>((resolve) => {
       pendingCloseResolve = resolve;
     });
 
-    responsePromise.then((action) => {
+    const timeout = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("close-window-only"), 5000);
+    });
+
+    Promise.race([responsePromise, timeout]).then((action) => {
       if (action === "cancel") {
         // Do nothing, window stays open
         return;
