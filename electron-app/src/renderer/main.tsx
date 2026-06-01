@@ -86,7 +86,35 @@ function App() {
     ws.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === "switch_and_capture") {
+        if (msg.type === "capture_request") {
+          const { sandbox_id, request_id } = msg;
+          const tabRef = terminalRefs.current.get(sandbox_id);
+          if (tabRef?.current) {
+            try {
+              const base64 = await tabRef.current.captureToPng();
+              ws.send(JSON.stringify({
+                type: "capture_response",
+                request_id,
+                sandbox_id,
+                image_base64: base64,
+              }));
+            } catch (err) {
+              ws.send(JSON.stringify({
+                type: "capture_error",
+                request_id,
+                sandbox_id,
+                error: String(err),
+              }));
+            }
+          } else {
+            ws.send(JSON.stringify({
+              type: "capture_error",
+              request_id,
+              sandbox_id,
+              error: "Terminal not found or not mounted",
+            }));
+          }
+        } else if (msg.type === "switch_and_capture") {
           const { sandbox_id, request_id } = msg;
           // Save current tab so we can restore after capture
           prevActiveTabRef.current = activeTabIdRef.current;

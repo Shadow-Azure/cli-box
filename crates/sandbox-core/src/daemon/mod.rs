@@ -450,6 +450,12 @@ async fn screenshot_handler(
             return Ok((StatusCode::OK, [("content-type", "image/png")], png).into_response());
         }
         // Fall through to ScreenCaptureKit if renderer unavailable
+    } else {
+        // Default mode: try renderer-based terminal capture (no frame)
+        if let Some(png) = request_renderer_screenshot(state.clone(), &id).await {
+            return Ok((StatusCode::OK, [("content-type", "image/png")], png).into_response());
+        }
+        // Fall through to ScreenCaptureKit if renderer unavailable
     }
 
     // If no window_id stored, try to discover the Electron window
@@ -581,6 +587,70 @@ async fn handle_screenshot_ws(
     let mut s = state.lock().await;
     s.screenshot_ws_tx = None;
     tracing::info!("Renderer screenshot WebSocket disconnected");
+}
+
+/// Request a screenshot from the Electron renderer via WebSocket.
+/// Returns PNG bytes if successful, None if renderer is unavailable or times out.
+async fn request_renderer_screenshot(
+    state: Arc<Mutex<DaemonState>>,
+    sandbox_id: &str,
+) -> Option<Vec<u8>> {
+    use futures_util::SinkExt;
+
+    let (request_id, response_rx, mut ws_tx) = {
+        let mut s = state.lock().await;
+        let ws_tx = s.screenshot_ws_tx.take()?;
+
+        s.screenshot_request_counter += 1;
+        let request_id = s.screenshot_request_counter;
+
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        s.pending_screenshots.insert(request_id, response_tx);
+
+        (request_id, response_rx, ws_tx)
+    };
+
+    let msg = serde_json::json!({
+        "type": "capture_request",
+        "request_id": request_id,
+        "sandbox_id": sandbox_id,
+    });
+
+    if ws_tx
+        .send(axum::extract::ws::Message::Text(msg.to_string().into()))
+        .await
+        .is_err()
+    {
+        tracing::warn!("[screenshot] failed to send request to renderer");
+        let mut s = state.lock().await;
+        s.pending_screenshots.remove(&request_id);
+        s.screenshot_ws_tx = Some(ws_tx);
+        return None;
+    }
+
+    // Put the ws_tx back
+    {
+        let mut s = state.lock().await;
+        s.screenshot_ws_tx = Some(ws_tx);
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
+        Ok(Ok(Ok(png_data))) => Some(png_data),
+        Ok(Ok(Err(e))) => {
+            tracing::warn!("[screenshot] renderer returned error: {e}");
+            None
+        }
+        Ok(Err(_)) => {
+            tracing::warn!("[screenshot] response channel dropped");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("[screenshot] renderer did not respond within 2s");
+            let mut s = state.lock().await;
+            s.pending_screenshots.remove(&request_id);
+            None
+        }
+    }
 }
 
 /// Ask the renderer to switch to a tab, then capture the full window with ScreenCaptureKit.
