@@ -469,12 +469,15 @@ async fn screenshot_handler(
             .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))?;
         match result {
             Ok(png_data) => {
-                return Ok((StatusCode::OK, [("content-type", "image/png")], png_data).into_response());
+                return Ok(
+                    (StatusCode::OK, [("content-type", "image/png")], png_data).into_response()
+                );
             }
             Err(AppError::WindowNotFound(_)) => {
                 tracing::warn!(
                     "Stored window_id={} for sandbox {} is stale, re-discovering",
-                    wid, id
+                    wid,
+                    id
                 );
             }
             Err(e) => return Err(e),
@@ -482,11 +485,10 @@ async fn screenshot_handler(
     }
 
     // Re-discover the Electron window by title
-    let new_wid = tokio::task::spawn_blocking(|| {
-        ScreenCapture::find_window_by_title("System Test Sandbox")
-    })
-    .await
-    .map_err(|e| AppError::Screenshot(format!("window discovery task failed: {e}")))??;
+    let new_wid =
+        tokio::task::spawn_blocking(|| ScreenCapture::find_window_by_title("System Test Sandbox"))
+            .await
+            .map_err(|e| AppError::Screenshot(format!("window discovery task failed: {e}")))??;
 
     {
         let mut s = state.lock().await;
@@ -498,11 +500,9 @@ async fn screenshot_handler(
     let _ = registry.update_window_id(&id, new_wid);
     tracing::info!("Re-discovered window_id={} for sandbox {}", new_wid, id);
 
-    let png_data = tokio::task::spawn_blocking(move || {
-        ScreenCapture::capture_window(new_wid)
-    })
-    .await
-    .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))??;
+    let png_data = tokio::task::spawn_blocking(move || ScreenCapture::capture_window(new_wid))
+        .await
+        .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))??;
     Ok((StatusCode::OK, [("content-type", "image/png")], png_data).into_response())
 }
 
@@ -594,15 +594,13 @@ async fn handle_screenshot_ws(state: Arc<Mutex<DaemonState>>, socket: WebSocket)
                 match serde_json::from_str::<serde_json::Value>(&text_str) {
                     Ok(msg) => {
                         let msg_type = msg.get("type").and_then(|v| v.as_str());
-                        let request_id =
-                            msg.get("request_id").and_then(|v| v.as_u64());
+                        let request_id = msg.get("request_id").and_then(|v| v.as_u64());
 
                         match msg_type {
                             Some("capture_response") => {
-                                if let (Some(req_id), Some(b64)) = (
-                                    request_id,
-                                    msg.get("image_base64").and_then(|v| v.as_str()),
-                                ) {
+                                if let (Some(req_id), Some(b64)) =
+                                    (request_id, msg.get("image_base64").and_then(|v| v.as_str()))
+                                {
                                     let png_data = base64_decode(b64);
                                     let mut s = state.lock().await;
                                     if let Some(tx) = s.pending_screenshots.remove(&req_id) {
@@ -691,7 +689,9 @@ async fn screenshot_region_handler(
                     ScreenCapture::find_window_by_title("System Test Sandbox")
                 })
                 .await
-                .map_err(|e| AppError::Screenshot(format!("window discovery task failed: {e}")))??;
+                .map_err(|e| {
+                    AppError::Screenshot(format!("window discovery task failed: {e}"))
+                })??;
                 let mut s = state.lock().await;
                 if let Some(sb) = s.sandboxes.get_mut(&id) {
                     sb.window_id = Some(new_wid);
