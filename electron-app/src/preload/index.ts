@@ -10,4 +10,10 @@ contextBridge.exposeInMainWorld("sandbox", {
   onSwitchTab: (callback: (sandboxId: string) => void) => {
     ipcRenderer.on("switch-to-tab", (_event, sandboxId) => callback(sandboxId));
   },
+  // Window close coordination
+  onWindowClosing: (callback: (sandboxIds: string[]) => void) => {
+    ipcRenderer.on("window-closing", (_event, sandboxIds) => callback(sandboxIds));
+  },
+  sendCloseResponse: (action: "cancel" | "close-window-only" | "close-all") =>
+    ipcRenderer.invoke("window-close-response", action),
 });

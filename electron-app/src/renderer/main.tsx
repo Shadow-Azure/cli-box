@@ -20,6 +20,8 @@ declare global {
       closeTab: (sandboxId: string) => Promise<void>;
       listTabs: () => Promise<{ id: string; kind: string; title: string }[]>;
       onSwitchTab: (callback: (sandboxId: string) => void) => void;
+      onWindowClosing: (callback: (sandboxIds: string[]) => void) => void;
+      sendCloseResponse: (action: "cancel" | "close-window-only" | "close-all") => Promise<void>;
     };
   }
 }
