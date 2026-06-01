@@ -55,6 +55,16 @@ ipcMain.handle("switch-tab", (_event, sandboxId: string) => {
 ipcMain.handle("close-tab", () => {});
 ipcMain.handle("list-tabs", () => []);
 
+// IPC: window close coordination
+let pendingCloseResolve: ((action: string) => void) | null = null;
+
+ipcMain.handle("window-close-response", (_event, action: string) => {
+  if (pendingCloseResolve) {
+    pendingCloseResolve(action);
+    pendingCloseResolve = null;
+  }
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -85,6 +95,41 @@ function createWindow() {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  // NEW: intercept close to show confirmation dialog
+  mainWindow.on("close", (e) => {
+    if (!mainWindow) return;
+
+    // Query renderer for sandbox list, then wait for user's choice
+    e.preventDefault();
+
+    mainWindow.webContents.send("window-closing");
+
+    // Wait for renderer response via IPC
+    const responsePromise = new Promise<string>((resolve) => {
+      pendingCloseResolve = resolve;
+    });
+
+    responsePromise.then((action) => {
+      if (action === "cancel") {
+        // Do nothing, window stays open
+        return;
+      }
+
+      if (action === "close-window-only") {
+        // Remove this handler to avoid infinite loop, then close
+        mainWindow?.removeAllListeners("close");
+        mainWindow?.close();
+        return;
+      }
+
+      if (action === "close-all") {
+        // Renderer will have already closed all sandboxes before sending this
+        mainWindow?.removeAllListeners("close");
+        mainWindow?.close();
+      }
+    });
   });
 }
 
