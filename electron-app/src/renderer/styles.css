@@ -492,6 +492,23 @@ html, body {
   border-color: var(--accent);
 }
 
+.dialog-actions button.danger {
+  background: var(--error);
+  color: white;
+  border-color: var(--error);
+}
+
+.dialog-actions button.danger:hover {
+  opacity: 0.9;
+}
+
+.dialog-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
 /* ── App Panel ───────────────────────────────── */
 
 .app-panel {
