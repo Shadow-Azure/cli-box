@@ -417,7 +417,7 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: 运行 test.sh
-        run: sh test.sh
+        run: bash test.sh
 
   # ==================== 门禁结果汇总 ====================
   gate-result:
