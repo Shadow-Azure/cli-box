@@ -4,6 +4,7 @@ export const test = base.extend<{ mockedPage: Page }>({
   mockedPage: async ({ page }, use) => {
     // Mock window.sandbox IPC bridge
     await page.addInitScript(() => {
+      let windowClosingCallback: (() => void) | null = null;
       (window as any).sandbox = {
         getDaemonPort: () => Promise.resolve(15801),
         createTab: () => Promise.resolve(),
@@ -11,8 +12,9 @@ export const test = base.extend<{ mockedPage: Page }>({
         closeTab: () => Promise.resolve(),
         listTabs: () => Promise.resolve([]),
         onSwitchTab: () => {},
-        onWindowClosing: () => {},
+        onWindowClosing: (cb: () => void) => { windowClosingCallback = cb; },
         sendCloseResponse: () => Promise.resolve(),
+        triggerWindowClosing: () => { windowClosingCallback?.(); },
       };
     });
 

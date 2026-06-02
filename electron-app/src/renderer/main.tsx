@@ -416,14 +416,11 @@ function App() {
               <button
                 className="danger"
                 onClick={async () => {
-                  // Close all sandboxes first
                   for (const tab of tabs) {
                     try {
-                      await fetch(`http://127.0.0.1:${getDaemonPort()}/sandbox/${tab.id}`, {
-                        method: "DELETE",
-                      });
+                      await closeSandbox(tab.id);
                     } catch {
-                      // ignore
+                      // ignore — sandbox may already be gone
                     }
                   }
                   setShowWindowCloseDialog(false);
