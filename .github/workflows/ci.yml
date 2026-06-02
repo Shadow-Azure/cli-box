@@ -271,6 +271,54 @@ jobs:
           path: electron-app/coverage/
           retention-days: 14
 
+  # ==================== Playwright E2E 测试 ====================
+  e2e-test:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: 安装依赖
+        working-directory: electron-app
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 Playwright 浏览器
+        working-directory: electron-app
+        run: npx playwright install chromium --with-deps
+
+      - name: 运行 Playwright E2E 测试
+        working-directory: electron-app
+        run: npx playwright test --config e2e/playwright.config.ts
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: electron-app/playwright-report/
+          retention-days: 7
+
+      - name: 上传测试截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: electron-app/test-results/
+          retention-days: 7
+
   # ==================== 安全检查 ====================
   security:
     name: 安全检查
@@ -339,7 +387,7 @@ jobs:
   gate-result:
     name: 门禁结果
     runs-on: ubuntu-latest
-    needs: [rust-fmt, rust-clippy, rust-test, frontend-test, security]
+    needs: [rust-fmt, rust-clippy, rust-test, frontend-test, e2e-test, security]
     if: always()
 
     steps:
@@ -370,6 +418,7 @@ jobs:
           RUST_CLIPPY="${{ needs.rust-clippy.result }}"
           RUST_TEST="${{ needs.rust-test.result }}"
           FRONTEND_TEST="${{ needs.frontend-test.result }}"
+          E2E_TEST="${{ needs.e2e-test.result }}"
           SECURITY_RESULT="${{ needs.security.result }}"
 
           echo "| 检查项 | 状态 |"
@@ -378,6 +427,7 @@ jobs:
           echo "| Rust Clippy | $RUST_CLIPPY |"
           echo "| Rust 测试 & 覆盖率 | $RUST_TEST |"
           echo "| 前端测试 & 覆盖率 | $FRONTEND_TEST |"
+          echo "| Playwright E2E | $E2E_TEST |"
           echo "| 安全检查 | $SECURITY_RESULT |"
           echo ""
 
@@ -397,6 +447,7 @@ jobs:
                 "$RUST_CLIPPY" == "success" && \
                 "$RUST_TEST" == "success" && \
                 "$FRONTEND_TEST" == "success" && \
+                "$E2E_TEST" == "success" && \
                 "$SECURITY_RESULT" == "success" ]]; then
             echo "✅ 所有门禁检查通过！"
             exit 0
@@ -417,6 +468,7 @@ jobs:
               'Rust Clippy': '${{ needs.rust-clippy.result }}',
               'Rust 测试 & 覆盖率': '${{ needs.rust-test.result }}',
               '前端测试 & 覆盖率': '${{ needs.frontend-test.result }}',
+              'Playwright E2E': '${{ needs.e2e-test.result }}',
               '安全检查': '${{ needs.security.result }}',
             };
 
