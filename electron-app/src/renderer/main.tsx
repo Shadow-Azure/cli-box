@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import SandboxTerminal, { SandboxTerminalHandle } from "./components/Terminal";
 import {
-  SandboxInfo,
   fetchSandboxList,
   setDaemonPort,
   getDaemonPort,
   createSandbox,
+  closeSandbox,
 } from "./api";
+import { Tab, syncTabs, selectAfterClose } from "./tabState";
 import AppPanel from "./components/AppPanel";
 import "./styles.css";
 
@@ -20,15 +21,10 @@ declare global {
       closeTab: (sandboxId: string) => Promise<void>;
       listTabs: () => Promise<{ id: string; kind: string; title: string }[]>;
       onSwitchTab: (callback: (sandboxId: string) => void) => void;
+      onWindowClosing: (callback: () => void) => void;
+      sendCloseResponse: (action: "cancel" | "close-window-only" | "close-all") => Promise<void>;
     };
   }
-}
-
-interface Tab {
-  id: string;
-  kind: string;
-  title: string;
-  sandbox: SandboxInfo;
 }
 
 type Theme = "dark" | "light" | "system";
@@ -43,6 +39,9 @@ function App() {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newSandboxCmd, setNewSandboxCmd] = useState("");
   const [newSandboxMode, setNewSandboxMode] = useState<"cli" | "app">("cli");
+  // Close confirmation state
+  const [closeConfirmTabId, setCloseConfirmTabId] = useState<string | null>(null);
+  const [showWindowCloseDialog, setShowWindowCloseDialog] = useState(false);
   const refreshTimer = useRef<ReturnType<typeof setInterval>>();
   const terminalRefs = useRef<Map<string, React.RefObject<SandboxTerminalHandle>>>(new Map());
 
@@ -74,27 +73,28 @@ function App() {
     });
   }, []);
 
+  // Ref to access latest tabs in IPC callback without re-registering listener
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
+  // Listen for window close request from main process (register once)
+  useEffect(() => {
+    window.sandbox.onWindowClosing(() => {
+      if (tabsRef.current.length === 0) {
+        // No sandboxes, close directly
+        window.sandbox.sendCloseResponse("close-window-only");
+      } else {
+        setShowWindowCloseDialog(true);
+      }
+    });
+  }, []);
+
   // Poll for sandbox changes
   const refreshSandboxes = useCallback(async () => {
     try {
       const list = await fetchSandboxList();
-      setTabs((prev) => {
-        const existing = new Map(prev.map((t) => [t.id, t]));
-        const next: Tab[] = [];
-        for (const sb of list) {
-          const title = sb.kind?.detail?.command || sb.id.slice(0, 8);
-          const existingTab = existing.get(sb.id);
-          next.push({
-            id: sb.id,
-            kind: sb.kind?.type || "cli",
-            title,
-            sandbox: sb,
-          });
-        }
-        return next;
-      });
-
-      // Auto-select first tab if none selected
+      const { tabs: nextTabs } = syncTabs(tabsRef.current, list);
+      setTabs(nextTabs);
       if (!activeTabId && list.length > 0) {
         setActiveTabId(list[0].id);
       }
@@ -165,22 +165,34 @@ function App() {
   }, [connected]);
 
   const handleCloseTab = useCallback(
+    (id: string) => {
+      const tab = tabs.find((t) => t.id === id);
+      if (tab && tab.sandbox.status?.type === "Running") {
+        // Show confirmation dialog
+        setCloseConfirmTabId(id);
+        return;
+      }
+      // Not running, close directly
+      doCloseTab(id);
+    },
+    [tabs]
+  );
+
+  const doCloseTab = useCallback(
     async (id: string) => {
       try {
-        await fetch(`${getDaemonPort() ? `http://127.0.0.1:${getDaemonPort()}` : ""}/sandbox/${id}`, {
-          method: "DELETE",
-        });
+        await closeSandbox(id);
       } catch {
-        // ignore
+        // ignore — sandbox may already be gone
       }
       terminalRefs.current.delete(id);
-      setTabs((prev) => prev.filter((t) => t.id !== id));
-      if (activeTabId === id) {
-        const remaining = tabs.filter((t) => t.id !== id);
-        setActiveTabId(remaining.length > 0 ? remaining[0].id : null);
-      }
+      setTabs((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        setActiveTabId(selectAfterClose(prev, id, activeTabId));
+        return next;
+      });
     },
-    [activeTabId, tabs]
+    [activeTabId]
   );
 
   const handleTabClick = useCallback((id: string) => {
@@ -350,6 +362,72 @@ function App() {
                 }}
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close Tab Confirmation Dialog */}
+      {closeConfirmTabId && (
+        <div className="dialog-overlay">
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-title">Close Terminal</div>
+            <div className="dialog-message">
+              This terminal is still running. Are you sure you want to close it?
+            </div>
+            <div className="dialog-actions">
+              <button onClick={() => setCloseConfirmTabId(null)}>Cancel</button>
+              <button
+                className="danger"
+                onClick={() => {
+                  doCloseTab(closeConfirmTabId);
+                  setCloseConfirmTabId(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Window Close Dialog */}
+      {showWindowCloseDialog && (
+        <div className="dialog-overlay">
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-title">Close Window</div>
+            <div className="dialog-message">
+              {tabs.length} terminal{tabs.length !== 1 ? "s" : ""} running. What would you like to do?
+            </div>
+            <div className="dialog-actions">
+              <button onClick={() => {
+                setShowWindowCloseDialog(false);
+                window.sandbox.sendCloseResponse("cancel");
+              }}>
+                Cancel
+              </button>
+              <button onClick={() => {
+                setShowWindowCloseDialog(false);
+                window.sandbox.sendCloseResponse("close-window-only");
+              }}>
+                Close Window Only
+              </button>
+              <button
+                className="danger"
+                onClick={async () => {
+                  for (const tab of tabs) {
+                    try {
+                      await closeSandbox(tab.id);
+                    } catch {
+                      // ignore — sandbox may already be gone
+                    }
+                  }
+                  setShowWindowCloseDialog(false);
+                  window.sandbox.sendCloseResponse("close-all");
+                }}
+              >
+                Close All Terminals
               </button>
             </div>
           </div>

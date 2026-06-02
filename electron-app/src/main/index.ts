@@ -55,6 +55,16 @@ ipcMain.handle("switch-tab", (_event, sandboxId: string) => {
 ipcMain.handle("close-tab", () => {});
 ipcMain.handle("list-tabs", () => []);
 
+// IPC: window close coordination
+let pendingCloseResolve: ((action: string) => void) | null = null;
+
+ipcMain.handle("window-close-response", (_event, action: string) => {
+  if (pendingCloseResolve) {
+    pendingCloseResolve(action);
+    pendingCloseResolve = null;
+  }
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -85,6 +95,48 @@ function createWindow() {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  // NEW: intercept close to show confirmation dialog
+  let isClosing = false;
+  mainWindow.on("close", (e) => {
+    if (!mainWindow || isClosing) return;
+    isClosing = true;
+
+    // Query renderer for sandbox list, then wait for user's choice
+    e.preventDefault();
+
+    mainWindow.webContents.send("window-closing");
+
+    // Wait for renderer response via IPC, with 5s timeout fallback
+    const responsePromise = new Promise<string>((resolve) => {
+      pendingCloseResolve = resolve;
+    });
+
+    const timeout = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("close-window-only"), 5000);
+    });
+
+    Promise.race([responsePromise, timeout]).then((action) => {
+      if (action === "cancel") {
+        // Reset guard so user can try closing again
+        isClosing = false;
+        return;
+      }
+
+      if (action === "close-window-only") {
+        // Remove this handler to avoid infinite loop, then close
+        mainWindow?.removeAllListeners("close");
+        mainWindow?.close();
+        return;
+      }
+
+      if (action === "close-all") {
+        // Renderer will have already closed all sandboxes before sending this
+        mainWindow?.removeAllListeners("close");
+        mainWindow?.close();
+      }
+    });
   });
 }
 
