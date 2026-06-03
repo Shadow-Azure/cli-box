@@ -140,7 +140,7 @@ test.describe("Close Confirmation Dialog", () => {
     await page.getByRole("button", { name: "Close" }).click();
 
     // After close succeeds, next poll returns empty → tab removed
-    await expect(page.locator(".empty-state-text")).toHaveText("No sandbox open", { timeout: 10000 });
+    await expect(page.locator(".empty-state-text")).toHaveText("No CLI Box open", { timeout: 10000 });
   });
 
   test("Close All Terminals calls POST /box/{id}/close for each tab", async ({ mockedPage: page }) => {

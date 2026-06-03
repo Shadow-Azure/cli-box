@@ -3,7 +3,7 @@ import { test, expect } from "./fixtures";
 test.describe("Tab Creation", () => {
   test("shows empty state when no sandboxes", async ({ mockedPage: page }) => {
     await page.goto("/");
-    await expect(page.locator(".empty-state-text")).toHaveText("No sandbox open");
+    await expect(page.locator(".empty-state-text")).toHaveText("No CLI Box open");
   });
 
   test("creates tab and shows terminal", async ({ mockedPage: page }) => {
