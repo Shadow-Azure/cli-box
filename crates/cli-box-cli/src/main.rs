@@ -657,7 +657,11 @@ async fn cmd_screenshot_daemon(output: &std::path::Path, id: Option<&str>) -> an
 
     std::fs::write(output, &result.png_data)
         .with_context(|| format!("Failed to write screenshot to {:?}", output))?;
-    println!("Screenshot saved to {:?} ({} bytes)", output, result.png_data.len());
+    println!(
+        "Screenshot saved to {:?} ({} bytes)",
+        output,
+        result.png_data.len()
+    );
     Ok(())
 }
 

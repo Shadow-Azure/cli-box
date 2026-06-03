@@ -448,7 +448,7 @@ async fn screenshot_handler(
                 id,
                 png_data.len()
             );
-            return Ok(screenshot_response(png_data, "renderer", None));
+            Ok(screenshot_response(png_data, "renderer", None))
         }
         Err(reason) => {
             tracing::warn!(
@@ -503,7 +503,11 @@ async fn screenshot_fallback(
             .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))?;
         match result {
             Ok(png_data) => {
-                return Ok(screenshot_response(png_data, "screencapturekit", Some("renderer_unavailable")));
+                return Ok(screenshot_response(
+                    png_data,
+                    "screencapturekit",
+                    Some("renderer_unavailable"),
+                ));
             }
             Err(AppError::WindowNotFound(_)) => {
                 tracing::warn!(
@@ -534,7 +538,11 @@ async fn screenshot_fallback(
     let png_data = tokio::task::spawn_blocking(move || ScreenCapture::capture_window(new_wid))
         .await
         .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))??;
-    Ok(screenshot_response(png_data, "screencapturekit", Some("renderer_unavailable")))
+    Ok(screenshot_response(
+        png_data,
+        "screencapturekit",
+        Some("renderer_unavailable"),
+    ))
 }
 
 // ── Screenshot WebSocket ────────────────────────────────────────
