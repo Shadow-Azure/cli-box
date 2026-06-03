@@ -15,8 +15,8 @@ use crate::server::{
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{oneshot, Mutex};
+use tokio::time::interval;
 use tower_http::cors::{Any, CorsLayer};
 
 // ── Types ─────────────────────────────────────────────────────
@@ -430,7 +431,7 @@ async fn close_sandbox_handler(
 async fn screenshot_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Response, AppError> {
     // Verify sandbox exists
     {
         let s = state.lock().await;
@@ -440,24 +441,60 @@ async fn screenshot_handler(
     }
 
     // Attempt 1: Ask the Electron renderer to capture via WebSocket
-    if let Some(png_data) = request_renderer_screenshot(state.clone(), &id).await {
-        tracing::info!(
-            "[screenshot] sandbox {} captured via renderer ({} bytes)",
-            id,
-            png_data.len()
-        );
-        return Ok((StatusCode::OK, [("content-type", "image/png")], png_data).into_response());
+    match request_renderer_screenshot(state.clone(), &id).await {
+        Ok(png_data) => {
+            tracing::info!(
+                "[screenshot] sandbox {} captured via renderer ({} bytes)",
+                id,
+                png_data.len()
+            );
+            return Ok(screenshot_response(png_data, "renderer", None));
+        }
+        Err(reason) => {
+            tracing::warn!(
+                "[screenshot] renderer capture failed for sandbox {}: {}; falling back to ScreenCaptureKit",
+                id,
+                reason
+            );
+            return screenshot_fallback(state, &id).await;
+        }
     }
+}
 
-    // Attempt 2: Fall back to ScreenCaptureKit
+/// Build a screenshot HTTP response with source/fallback headers.
+fn screenshot_response(png_data: Vec<u8>, source: &str, fallback_reason: Option<&str>) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("image/png"),
+    );
+    headers.insert(
+        "x-screenshot-source",
+        HeaderValue::from_str(source).expect("valid header value"),
+    );
+    if let Some(reason) = fallback_reason {
+        headers.insert(
+            "x-screenshot-fallback-reason",
+            HeaderValue::from_str(reason).expect("valid header value"),
+        );
+    }
+    (StatusCode::OK, headers, png_data).into_response()
+}
+
+/// Capture a screenshot via ScreenCaptureKit as a fallback, returning headers
+/// that indicate the fallback source and reason.
+async fn screenshot_fallback(
+    state: Arc<Mutex<DaemonState>>,
+    id: &str,
+) -> Result<Response, AppError> {
     tracing::info!(
-        "[screenshot] renderer unavailable for sandbox {}, falling back to ScreenCaptureKit",
+        "[screenshot] using ScreenCaptureKit fallback for sandbox {} (captures entire window)",
         id
     );
 
     let window_id = {
         let s = state.lock().await;
-        s.sandboxes.get(&id).and_then(|sb| sb.window_id)
+        s.sandboxes.get(id).and_then(|sb| sb.window_id)
     };
 
     if let Some(wid) = window_id {
@@ -466,9 +503,7 @@ async fn screenshot_handler(
             .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))?;
         match result {
             Ok(png_data) => {
-                return Ok(
-                    (StatusCode::OK, [("content-type", "image/png")], png_data).into_response()
-                );
+                return Ok(screenshot_response(png_data, "screencapturekit", Some("renderer_unavailable")));
             }
             Err(AppError::WindowNotFound(_)) => {
                 tracing::warn!(
@@ -488,31 +523,34 @@ async fn screenshot_handler(
 
     {
         let mut s = state.lock().await;
-        if let Some(sb) = s.sandboxes.get_mut(&id) {
+        if let Some(sb) = s.sandboxes.get_mut(id) {
             sb.window_id = Some(new_wid);
         }
     }
     let registry = InstanceRegistry::default();
-    let _ = registry.update_window_id(&id, new_wid);
+    let _ = registry.update_window_id(id, new_wid);
     tracing::info!("Re-discovered window_id={} for sandbox {}", new_wid, id);
 
     let png_data = tokio::task::spawn_blocking(move || ScreenCapture::capture_window(new_wid))
         .await
         .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))??;
-    Ok((StatusCode::OK, [("content-type", "image/png")], png_data).into_response())
+    Ok(screenshot_response(png_data, "screencapturekit", Some("renderer_unavailable")))
 }
 
 // ── Screenshot WebSocket ────────────────────────────────────────
 
 /// Request a screenshot from the Electron renderer via WebSocket.
-/// Returns PNG bytes if successful, None if renderer is unavailable or times out.
+/// Returns PNG bytes if successful, or a descriptive error string explaining why it failed.
 async fn request_renderer_screenshot(
     state: Arc<Mutex<DaemonState>>,
     sandbox_id: &str,
-) -> Option<Vec<u8>> {
+) -> Result<Vec<u8>, String> {
     let (request_id, response_rx, mut ws_tx) = {
         let mut s = state.lock().await;
-        let ws_tx = s.screenshot_ws_tx.take()?;
+        let ws_tx = s
+            .screenshot_ws_tx
+            .take()
+            .ok_or("WebSocket not connected (renderer may be closed or not yet connected)")?;
 
         s.screenshot_request_counter += 1;
         let request_id = s.screenshot_request_counter;
@@ -534,11 +572,10 @@ async fn request_renderer_screenshot(
         .await
         .is_err()
     {
-        tracing::warn!("[screenshot] failed to send request to renderer");
         let mut s = state.lock().await;
         s.pending_screenshots.remove(&request_id);
         s.screenshot_ws_tx = Some(ws_tx);
-        return None;
+        return Err("Failed to send request over WebSocket (connection broken)".to_string());
     }
 
     // Put the ws_tx back
@@ -548,20 +585,13 @@ async fn request_renderer_screenshot(
     }
 
     match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
-        Ok(Ok(Ok(png_data))) => Some(png_data),
-        Ok(Ok(Err(e))) => {
-            tracing::warn!("[screenshot] renderer returned error: {e}");
-            None
-        }
-        Ok(Err(_)) => {
-            tracing::warn!("[screenshot] response channel dropped");
-            None
-        }
+        Ok(Ok(Ok(png_data))) => Ok(png_data),
+        Ok(Ok(Err(e))) => Err(format!("Renderer returned error: {e}")),
+        Ok(Err(_)) => Err("Response channel dropped (renderer may have disconnected)".to_string()),
         Err(_) => {
-            tracing::warn!("[screenshot] renderer did not respond within 2s");
             let mut s = state.lock().await;
             s.pending_screenshots.remove(&request_id);
-            None
+            Err("Renderer did not respond within 2s timeout".to_string())
         }
     }
 }
@@ -583,62 +613,93 @@ async fn handle_screenshot_ws(state: Arc<Mutex<DaemonState>>, socket: WebSocket)
         tracing::info!("[screenshot_ws] renderer connected");
     }
 
-    while let Some(result) = ws_rx.next().await {
-        match result {
-            Ok(Message::Text(text)) => {
-                let text_str = text.to_string();
-                match serde_json::from_str::<serde_json::Value>(&text_str) {
-                    Ok(msg) => {
-                        let msg_type = msg.get("type").and_then(|v| v.as_str());
-                        let request_id = msg.get("request_id").and_then(|v| v.as_u64());
+    let mut ping_interval = interval(std::time::Duration::from_secs(10));
+    // Skip the first immediate tick
+    ping_interval.tick().await;
 
-                        match msg_type {
-                            Some("capture_response") => {
-                                if let (Some(req_id), Some(b64)) =
-                                    (request_id, msg.get("image_base64").and_then(|v| v.as_str()))
-                                {
-                                    let png_data = base64_decode(b64);
-                                    let mut s = state.lock().await;
-                                    if let Some(tx) = s.pending_screenshots.remove(&req_id) {
-                                        let _ = tx.send(png_data);
+    loop {
+        tokio::select! {
+            // Incoming message from renderer
+            result = ws_rx.next() => {
+                match result {
+                    Some(Ok(Message::Text(text))) => {
+                        let text_str = text.to_string();
+                        match serde_json::from_str::<serde_json::Value>(&text_str) {
+                            Ok(msg) => {
+                                let msg_type = msg.get("type").and_then(|v| v.as_str());
+                                let request_id = msg.get("request_id").and_then(|v| v.as_u64());
+
+                                match msg_type {
+                                    Some("capture_response") => {
+                                        if let (Some(req_id), Some(b64)) =
+                                            (request_id, msg.get("image_base64").and_then(|v| v.as_str()))
+                                        {
+                                            let png_data = base64_decode(b64);
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_screenshots.remove(&req_id) {
+                                                let _ = tx.send(png_data);
+                                            }
+                                        }
+                                    }
+                                    Some("capture_error") => {
+                                        let error = msg
+                                            .get("error")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("Unknown error")
+                                            .to_string();
+                                        if let Some(req_id) = request_id {
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_screenshots.remove(&req_id) {
+                                                let _ = tx.send(Err(error));
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        tracing::warn!(
+                                            "[screenshot_ws] unknown message type: {:?}",
+                                            msg_type
+                                        );
                                     }
                                 }
                             }
-                            Some("capture_error") => {
-                                let error = msg
-                                    .get("error")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Unknown error")
-                                    .to_string();
-                                if let Some(req_id) = request_id {
-                                    let mut s = state.lock().await;
-                                    if let Some(tx) = s.pending_screenshots.remove(&req_id) {
-                                        let _ = tx.send(Err(error));
-                                    }
-                                }
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    "[screenshot_ws] unknown message type: {:?}",
-                                    msg_type
-                                );
+                            Err(e) => {
+                                tracing::warn!("[screenshot_ws] JSON parse error: {e}");
                             }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("[screenshot_ws] JSON parse error: {e}");
+                    Some(Ok(Message::Pong(_))) => {
+                        // Pong received — connection is alive
                     }
+                    Some(Ok(Message::Close(_))) => {
+                        tracing::info!("[screenshot_ws] renderer sent close frame");
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!("[screenshot_ws] receive error: {e}");
+                        break;
+                    }
+                    None => {
+                        tracing::info!("[screenshot_ws] renderer stream ended");
+                        break;
+                    }
+                    _ => {}
                 }
             }
-            Ok(Message::Close(_)) => {
-                tracing::info!("[screenshot_ws] renderer sent close frame");
-                break;
+            // Periodic ping to keep connection alive
+            _ = ping_interval.tick() => {
+                let ping_sent = {
+                    let mut s = state.lock().await;
+                    if let Some(ref mut tx) = s.screenshot_ws_tx {
+                        tx.send(Message::Ping(vec![].into())).await.is_ok()
+                    } else {
+                        false
+                    }
+                };
+                if !ping_sent {
+                    tracing::warn!("[screenshot_ws] ping failed, renderer may have disconnected");
+                    break;
+                }
             }
-            Err(e) => {
-                tracing::warn!("[screenshot_ws] receive error: {e}");
-                break;
-            }
-            _ => {}
         }
     }
 

@@ -475,9 +475,11 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     );
     println!("Daemon port: {port}");
 
-    // Spawn Electron — if already running, requestSingleInstanceLock triggers
-    // second-instance event which syncs sandboxes and creates tabs.
-    if let Ok(electron_bin) = find_electron_binary() {
+    // Spawn Electron only if not already running.
+    // If already running, the renderer polls /box/list and will pick up the new sandbox.
+    if find_running_electron() {
+        tracing::info!("[start] Electron already running, skipping spawn");
+    } else if let Ok(electron_bin) = find_electron_binary() {
         tracing::info!("[start] spawning Electron: {}", electron_bin.display());
         let _child = Command::new(&electron_bin)
             .spawn()
@@ -639,14 +641,23 @@ async fn cmd_click_daemon(x: f64, y: f64, id: &str, button: &str) -> anyhow::Res
 async fn cmd_screenshot_daemon(output: &std::path::Path, id: Option<&str>) -> anyhow::Result<()> {
     let sandbox_id = id.ok_or_else(|| {
         anyhow::anyhow!(
-            "--id is required for screenshots. Use: sandbox screenshot --id <sandbox-id>"
+            "--id is required for screenshots. Use: cli-box screenshot --id <sandbox-id>"
         )
     })?;
 
-    let png = client::daemon_screenshot(sandbox_id).await?;
-    std::fs::write(output, &png)
+    let result = client::daemon_screenshot(sandbox_id).await?;
+
+    if result.source.as_deref() == Some("screencapturekit") {
+        eprintln!(
+            "Warning: screenshot used ScreenCaptureKit fallback (captured entire window).\n  Reason: {}",
+            result.fallback_reason.as_deref().unwrap_or("unknown")
+        );
+        eprintln!("  For terminal-only screenshots, ensure the Electron app is connected.");
+    }
+
+    std::fs::write(output, &result.png_data)
         .with_context(|| format!("Failed to write screenshot to {:?}", output))?;
-    println!("Screenshot saved to {:?} ({} bytes)", output, png.len());
+    println!("Screenshot saved to {:?} ({} bytes)", output, result.png_data.len());
     Ok(())
 }
 
@@ -1303,9 +1314,16 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
             }
             "screenshot_sandbox" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
-                let png = client::daemon_screenshot(id).await?;
-                let b64 = base64_encode(&png);
-                Ok(serde_json::json!({ "sandbox_id": id, "image_base64": b64 }))
+                let result = client::daemon_screenshot(id).await?;
+                let b64 = base64_encode(&result.png_data);
+                let mut response = serde_json::json!({ "sandbox_id": id, "image_base64": b64 });
+                if let Some(ref source) = result.source {
+                    response["screenshot_source"] = serde_json::json!(source);
+                }
+                if let Some(ref reason) = result.fallback_reason {
+                    response["fallback_reason"] = serde_json::json!(reason);
+                }
+                Ok(response)
             }
             "type_text" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
@@ -1466,7 +1484,6 @@ fn find_electron_binary() -> anyhow::Result<PathBuf> {
 }
 
 /// Check if Electron is already running by reading ~/.cli-box/electron.json
-#[allow(dead_code)]
 fn find_running_electron() -> bool {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let path = std::path::PathBuf::from(home)

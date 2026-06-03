@@ -111,57 +111,88 @@ function App() {
     };
   }, [refreshSandboxes]);
 
-  // Screenshot WebSocket: connect to daemon for per-tab capture
+  // Screenshot WebSocket: connect to daemon for per-tab capture (with reconnection)
   useEffect(() => {
     if (!connected) return;
     const port = getDaemonPort();
     if (!port) return;
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/screenshot/ws`);
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = 1000;
+    const MAX_RECONNECT_DELAY = 30000;
+    let unmounted = false;
 
-    ws.onopen = () => console.log("[screenshot-ws] connected");
+    function connect() {
+      if (unmounted) return;
 
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "capture_request") {
-          const { sandbox_id, request_id } = msg;
-          const tabRef = terminalRefs.current.get(sandbox_id);
-          if (tabRef?.current) {
-            try {
-              const base64 = await tabRef.current.captureToPng();
-              ws.send(JSON.stringify({
-                type: "capture_response",
-                request_id,
-                sandbox_id,
-                image_base64: base64,
-              }));
-            } catch (err) {
-              ws.send(JSON.stringify({
+      ws = new WebSocket(`ws://127.0.0.1:${port}/screenshot/ws`);
+
+      ws.onopen = () => {
+        console.log("[screenshot-ws] connected");
+        reconnectDelay = 1000; // Reset backoff on successful connection
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "capture_request") {
+            const { sandbox_id, request_id } = msg;
+            const tabRef = terminalRefs.current.get(sandbox_id);
+            if (tabRef?.current) {
+              try {
+                const base64 = await tabRef.current.captureToPng();
+                ws?.send(JSON.stringify({
+                  type: "capture_response",
+                  request_id,
+                  sandbox_id,
+                  image_base64: base64,
+                }));
+              } catch (err) {
+                ws?.send(JSON.stringify({
+                  type: "capture_error",
+                  request_id,
+                  sandbox_id,
+                  error: String(err),
+                }));
+              }
+            } else {
+              ws?.send(JSON.stringify({
                 type: "capture_error",
                 request_id,
                 sandbox_id,
-                error: String(err),
+                error: "Terminal not found or not mounted",
               }));
             }
-          } else {
-            ws.send(JSON.stringify({
-              type: "capture_error",
-              request_id,
-              sandbox_id,
-              error: "Terminal not found or not mounted",
-            }));
           }
+        } catch (err) {
+          console.error("[screenshot-ws] parse error:", err);
         }
-      } catch (err) {
-        console.error("[screenshot-ws] parse error:", err);
-      }
+      };
+
+      ws.onclose = () => {
+        console.log("[screenshot-ws] disconnected");
+        if (!unmounted) {
+          console.log(`[screenshot-ws] reconnecting in ${reconnectDelay}ms...`);
+          reconnectTimeout = setTimeout(() => {
+            reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+            connect();
+          }, reconnectDelay);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("[screenshot-ws] error:", err);
+      };
+    }
+
+    connect();
+
+    return () => {
+      unmounted = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) ws.close();
     };
-
-    ws.onclose = () => console.log("[screenshot-ws] disconnected");
-    ws.onerror = (err) => console.error("[screenshot-ws] error:", err);
-
-    return () => ws.close();
   }, [connected]);
 
   const handleCloseTab = useCallback(

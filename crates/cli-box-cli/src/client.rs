@@ -1,6 +1,13 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Result of a screenshot request, including fallback info.
+pub struct ScreenshotResult {
+    pub png_data: Vec<u8>,
+    pub source: Option<String>,
+    pub fallback_reason: Option<String>,
+}
+
 /// Check if debug logging is enabled via SANDBOX_LOGGER_LEVEL=debug
 fn debug_enabled() -> bool {
     std::env::var("SANDBOX_LOGGER_LEVEL")
@@ -105,8 +112,9 @@ pub async fn daemon_list_sandboxes() -> Result<Vec<DaemonSandbox>> {
     Ok(list)
 }
 
-/// Take a screenshot of a sandbox via the daemon HTTP API. Returns PNG bytes.
-pub async fn daemon_screenshot(sandbox_id: &str) -> Result<Vec<u8>> {
+/// Take a screenshot of a sandbox via the daemon HTTP API.
+/// Returns PNG data along with fallback info from response headers.
+pub async fn daemon_screenshot(sandbox_id: &str) -> Result<ScreenshotResult> {
     let base = daemon_base_url()?;
     let client = reqwest_client();
     let resp = client
@@ -119,8 +127,22 @@ pub async fn daemon_screenshot(sandbox_id: &str) -> Result<Vec<u8>> {
         let text = resp.text().await.unwrap_or_default();
         anyhow::bail!("screenshot failed (HTTP {status}): {text}");
     }
-    let bytes = resp.bytes().await?.to_vec();
-    Ok(bytes)
+    let source = resp
+        .headers()
+        .get("x-screenshot-source")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let fallback_reason = resp
+        .headers()
+        .get("x-screenshot-fallback-reason")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    let png_data = resp.bytes().await?.to_vec();
+    Ok(ScreenshotResult {
+        png_data,
+        source,
+        fallback_reason,
+    })
 }
 
 /// Click in a sandbox via the daemon HTTP API.
