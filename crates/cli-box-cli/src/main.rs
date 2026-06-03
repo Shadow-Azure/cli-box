@@ -26,7 +26,7 @@ enum Commands {
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
 
-        /// Start with a zsh shell (shorthand for `sandbox start zsh`)
+        /// Start with a zsh shell (shorthand for `cli-box start zsh`)
         #[arg(long)]
         shell: bool,
     },
@@ -496,8 +496,8 @@ async fn cmd_list_daemon() -> anyhow::Result<()> {
 
     if sandboxes.is_empty() {
         println!("No sandbox instances found.");
-        println!("Start one with: sandbox start  (opens zsh by default)");
-        println!("Or: sandbox start <command>  (e.g., sandbox start claude)");
+        println!("Start one with: cli-box start  (opens zsh by default)");
+        println!("Or: cli-box start <command>  (e.g., cli-box start claude)");
         return Ok(());
     }
 
@@ -719,8 +719,8 @@ fn cmd_list() -> anyhow::Result<()> {
 
     if instances.is_empty() {
         println!("No sandbox instances found.");
-        println!("Start one with: sandbox start  (opens zsh by default)");
-        println!("Or: sandbox start <command>  (e.g., sandbox start claude)");
+        println!("Start one with: cli-box start  (opens zsh by default)");
+        println!("Or: cli-box start <command>  (e.g., cli-box start claude)");
         return Ok(());
     }
 
