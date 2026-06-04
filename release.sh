@@ -307,6 +307,24 @@ cd "$SKILL_PKG_DIR" && tar czf "$RELEASE_DIR/cli-box-skill.tar.gz" . && cd "$SCR
 rm -rf "$SKILL_PKG_DIR"
 ok "cli-box-skill.tar.gz packaged"
 
+# --- step 8: package Electron standalone tarball ---
+echo ""
+info "Packaging Electron standalone tarball..."
+cd "$RELEASE_DIR" && tar czf "CLI-Box-app-macos-arm64.tar.gz" "CLI Box.app" && cd "$SCRIPT_DIR"
+ok "CLI-Box-app-macos-arm64.tar.gz packaged"
+
+# --- step 9: populate npm platform packages ---
+echo ""
+info "Populating npm platform packages..."
+mkdir -p "$SCRIPT_DIR/packages/cli-box-darwin-arm64/bin"
+cp "$CLI_BIN" "$SCRIPT_DIR/packages/cli-box-darwin-arm64/bin/"
+cp "$DAEMON_BIN" "$SCRIPT_DIR/packages/cli-box-darwin-arm64/bin/"
+chmod +x "$SCRIPT_DIR/packages/cli-box-darwin-arm64/bin/*"
+
+mkdir -p "$SCRIPT_DIR/packages/cli-box-electron-darwin-arm64/app"
+cp -R "$RELEASE_DIR/CLI Box.app" "$SCRIPT_DIR/packages/cli-box-electron-darwin-arm64/app/"
+ok "npm platform packages populated"
+
 # --- done ---
 echo ""
 echo "=============================================="
