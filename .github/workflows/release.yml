@@ -170,6 +170,16 @@ jobs:
         run: |
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
 
+          # Configure git to use HTTPS instead of SSH (avoids permission denied errors in CI)
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+          # Set version from git tag
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version -w packages/cli-box-darwin-arm64
+          npm version "$VERSION" --no-git-tag-version -w packages/cli-box-electron-darwin-arm64
+          npm version "$VERSION" --no-git-tag-version -w packages/cli-box-skill
+
           npm publish packages/cli-box-darwin-arm64 --access public
           npm publish packages/cli-box-electron-darwin-arm64 --access public
           npm publish packages/cli-box-skill --access public
