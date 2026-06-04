@@ -124,8 +124,8 @@ jobs:
 
           # Skill tarball
           mkdir -p skill-pkg/bin
-          cp skill/SKILL.md skill-pkg/
-          cp skill/install.sh skill-pkg/
+          cp packages/cli-box-skill/skill/SKILL.md skill-pkg/
+          cp packages/cli-box-skill/skill/install.sh skill-pkg/
           chmod +x skill-pkg/install.sh
           cp target/release/cli-box skill-pkg/bin/
           cp target/release/cli-box-daemon skill-pkg/bin/
