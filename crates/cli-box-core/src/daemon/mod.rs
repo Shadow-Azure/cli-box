@@ -123,6 +123,14 @@ struct HealthResponse {
     sandboxes: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DaemonReadinessResponse {
+    /// "ready" if renderer WebSocket is connected, "not_ready" otherwise.
+    pub status: String,
+    /// Whether the Electron renderer's screenshot WebSocket is connected.
+    pub renderer_connected: bool,
+}
+
 #[derive(Deserialize)]
 pub struct UiFindRequest {
     pub role: String,
@@ -241,6 +249,7 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
 
     Router::new()
         .route("/health", get(health_handler))
+        .route("/readyz", get(readyz_handler))
         .route("/box/list", get(list_sandboxes_handler))
         .route("/box/create", post(create_sandbox_handler))
         .route("/box/{id}/close", post(close_sandbox_handler))
@@ -278,6 +287,15 @@ async fn health_handler(State(state): State<Arc<Mutex<DaemonState>>>) -> Json<He
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_secs: s.started_at.elapsed().as_secs(),
         sandboxes: s.sandboxes.len(),
+    })
+}
+
+async fn readyz_handler(State(state): State<Arc<Mutex<DaemonState>>>) -> Json<DaemonReadinessResponse> {
+    let s = state.lock().await;
+    let renderer_connected = s.screenshot_ws_tx.is_some();
+    Json(DaemonReadinessResponse {
+        status: if renderer_connected { "ready" } else { "not_ready" }.to_string(),
+        renderer_connected,
     })
 }
 

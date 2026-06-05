@@ -197,3 +197,22 @@ async fn screenshot_with_frame_attempts_tab_switch() {
         "with_frame=true should be parsed, not rejected as bad request"
     );
 }
+
+#[tokio::test]
+async fn readyz_returns_not_ready_without_renderer() {
+    let resp = router()
+        .oneshot(
+            Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "not_ready");
+    assert_eq!(json["renderer_connected"], false);
+}
