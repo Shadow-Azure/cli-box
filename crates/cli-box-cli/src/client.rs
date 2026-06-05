@@ -48,6 +48,25 @@ pub struct DaemonHealthResponse {
     pub sandboxes: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DaemonReadinessResponse {
+    pub status: String,
+    pub renderer_connected: bool,
+}
+
+/// Check daemon readiness (renderer WebSocket connection status).
+pub async fn daemon_readiness() -> Result<DaemonReadinessResponse> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let resp = client
+        .get(format!("{base}/readyz"))
+        .send()
+        .await
+        .with_context(|| "Failed to connect to daemon readyz endpoint")?;
+    let readiness: DaemonReadinessResponse = resp.json().await?;
+    Ok(readiness)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DaemonSandbox {
     pub id: String,
@@ -1040,6 +1059,24 @@ mod tests {
         let resp: ReadyzResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.status, "ready");
         assert!(resp.pending_cli);
+    }
+
+    // ── DaemonReadinessResponse deserialization ─────────────
+
+    #[test]
+    fn test_deserialize_daemon_readiness_connected() {
+        let json = r#"{"status":"ready","renderer_connected":true}"#;
+        let resp: DaemonReadinessResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "ready");
+        assert!(resp.renderer_connected);
+    }
+
+    #[test]
+    fn test_deserialize_daemon_readiness_not_connected() {
+        let json = r#"{"status":"not_ready","renderer_connected":false}"#;
+        let resp: DaemonReadinessResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "not_ready");
+        assert!(!resp.renderer_connected);
     }
 }
 
