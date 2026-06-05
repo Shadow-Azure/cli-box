@@ -530,8 +530,7 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
             }
 
             dot_count = (dot_count % 3) + 1;
-            print!("\r正在启动{}", ".".repeat(dot_count as usize));
-            print!("{}", " ".repeat(3 - dot_count as usize)); // clear leftover dots
+            print!("\r正在启动{:<3}", ".".repeat(dot_count as usize));
             let _ = std::io::stdout().flush();
 
             tokio::time::sleep(poll_interval).await;

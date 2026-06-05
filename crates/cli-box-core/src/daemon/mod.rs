@@ -290,6 +290,9 @@ async fn health_handler(State(state): State<Arc<Mutex<DaemonState>>>) -> Json<He
     })
 }
 
+/// Daemon-level readiness: always returns 200 with readiness in JSON body.
+/// Unlike the sandbox-level /readyz (server/mod.rs) which returns 503/200,
+/// this is a polling endpoint — callers check `renderer_connected` in the response.
 async fn readyz_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
 ) -> Json<DaemonReadinessResponse> {
