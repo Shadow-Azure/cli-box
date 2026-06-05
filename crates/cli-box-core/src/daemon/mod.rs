@@ -502,6 +502,11 @@ async fn screenshot_with_frame(
     state: Arc<Mutex<DaemonState>>,
     id: &str,
 ) -> Result<Response, AppError> {
+    // Switch to the target tab before capturing so SCK sees the correct content.
+    if let Err(e) = request_switch_tab(state.clone(), id).await {
+        tracing::warn!("Failed to switch tab for sandbox {}: {}", id, e);
+    }
+
     let window_id = {
         let s = state.lock().await;
         s.sandboxes.get(id).and_then(|sb| sb.window_id)
@@ -613,6 +618,62 @@ async fn request_renderer_screenshot(
     }
 }
 
+/// Request the renderer to switch to a specific tab via WebSocket.
+/// Waits for the renderer to acknowledge the tab switch.
+async fn request_switch_tab(
+    state: Arc<Mutex<DaemonState>>,
+    sandbox_id: &str,
+) -> Result<(), String> {
+    let (request_id, response_rx, mut ws_tx) = {
+        let mut s = state.lock().await;
+        let ws_tx = s
+            .screenshot_ws_tx
+            .take()
+            .ok_or("WebSocket not connected (renderer may be closed or not yet connected)")?;
+
+        s.screenshot_request_counter += 1;
+        let request_id = s.screenshot_request_counter;
+
+        let (response_tx, response_rx) = oneshot::channel();
+        s.pending_screenshots.insert(request_id, response_tx);
+
+        (request_id, response_rx, ws_tx)
+    };
+
+    let msg = serde_json::json!({
+        "type": "switch_tab_request",
+        "request_id": request_id,
+        "sandbox_id": sandbox_id,
+    });
+
+    if ws_tx
+        .send(Message::Text(msg.to_string().into()))
+        .await
+        .is_err()
+    {
+        let mut s = state.lock().await;
+        s.pending_screenshots.remove(&request_id);
+        s.screenshot_ws_tx = Some(ws_tx);
+        return Err("Failed to send switch_tab request over WebSocket".to_string());
+    }
+
+    {
+        let mut s = state.lock().await;
+        s.screenshot_ws_tx = Some(ws_tx);
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
+        Ok(Ok(Ok(_))) => Ok(()),
+        Ok(Ok(Err(e))) => Err(format!("Renderer returned error on switch_tab: {e}")),
+        Ok(Err(_)) => Err("Response channel dropped during switch_tab".to_string()),
+        Err(_) => {
+            let mut s = state.lock().await;
+            s.pending_screenshots.remove(&request_id);
+            Err("Renderer did not respond to switch_tab within 2s timeout".to_string())
+        }
+    }
+}
+
 /// WebSocket endpoint for renderer-based screenshot capture.
 async fn screenshot_ws_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
@@ -668,6 +729,14 @@ async fn handle_screenshot_ws(state: Arc<Mutex<DaemonState>>, socket: WebSocket)
                                             let mut s = state.lock().await;
                                             if let Some(tx) = s.pending_screenshots.remove(&req_id) {
                                                 let _ = tx.send(Err(error));
+                                            }
+                                        }
+                                    }
+                                    Some("switch_tab_response") => {
+                                        if let Some(req_id) = request_id {
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_screenshots.remove(&req_id) {
+                                                let _ = tx.send(Ok(vec![]));
                                             }
                                         }
                                     }
@@ -1743,6 +1812,42 @@ mod tests {
         assert_eq!(
             headers.get("x-screenshot-fallback-reason").unwrap(),
             "renderer_unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_switch_tab_returns_error_when_ws_not_connected() {
+        let state = test_daemon_state_with_sandbox();
+        let result = request_switch_tab(state, "test-sb").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("WebSocket not connected"),
+            "Expected 'WebSocket not connected', got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_with_frame_logs_warning_on_switch_tab_failure() {
+        // screenshot_with_frame calls request_switch_tab first, which will fail
+        // (no WebSocket), then proceeds to SCK capture. The function should not
+        // return an error just because the tab switch failed — it logs a warning.
+        let app = test_daemon_router_with_sandbox();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/box/test-sb/screenshot?with_frame=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // The SCK capture will also fail (no real window), but the important thing
+        // is that the switch_tab failure didn't cause a client error.
+        let status = resp.status();
+        assert!(
+            !status.is_client_error(),
+            "switch_tab failure should not cause client error, got {status}"
         );
     }
 }

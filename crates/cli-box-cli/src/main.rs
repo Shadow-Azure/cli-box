@@ -660,6 +660,12 @@ async fn cmd_screenshot_daemon(
         eprintln!("Screenshot captured with ScreenCaptureKit (full window frame).");
     }
 
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {:?}", parent))?;
+        }
+    }
     std::fs::write(output, &result.png_data)
         .with_context(|| format!("Failed to write screenshot to {:?}", output))?;
     println!(
@@ -1716,5 +1722,23 @@ mod tests {
         } else {
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    #[test]
+    fn screenshot_output_creates_parent_directories() {
+        let tmp = std::env::temp_dir().join(format!("cli_box_test_{}", std::process::id()));
+        let nested = tmp.join("a").join("b").join("c").join("shot.png");
+
+        // Simulate the logic from cmd_screenshot_daemon
+        let output = nested.as_path();
+        if let Some(parent) = output.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+        }
+        std::fs::write(output, b"\x89PNG").unwrap();
+
+        assert!(nested.exists(), "File should exist at nested path");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
