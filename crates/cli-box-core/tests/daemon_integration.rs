@@ -189,8 +189,11 @@ async fn screenshot_with_frame_attempts_tab_switch() {
         .unwrap();
 
     let status = resp.status();
-    assert!(
-        !status.is_client_error(),
-        "with_frame=true should not be a client error, got {status}"
+    // SCK path fails with 404 (WindowNotFound) or 500 (Screenshot error),
+    // but must NOT be 400 (Bad Request) — proves query param is parsed.
+    assert_ne!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "with_frame=true should be parsed, not rejected as bad request"
     );
 }

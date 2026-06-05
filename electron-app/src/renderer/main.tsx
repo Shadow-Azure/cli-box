@@ -138,9 +138,15 @@ function App() {
           const msg = JSON.parse(event.data);
           if (msg.type === "switch_tab_request") {
             const { sandbox_id, request_id } = msg;
-            setActiveTabId(sandbox_id);
+            // Switch tab via IPC so main process repositions WebContentsView
+            try {
+              await window.sandbox.switchTab(sandbox_id);
+            } catch {
+              // fallback: update React state only
+              setActiveTabId(sandbox_id);
+            }
             // Small delay for tab to render
-            await new Promise((r) => setTimeout(r, 100));
+            await new Promise((r) => setTimeout(r, 200));
             ws?.send(JSON.stringify({
               type: "switch_tab_response",
               request_id,

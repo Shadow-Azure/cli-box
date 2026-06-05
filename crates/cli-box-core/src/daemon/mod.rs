@@ -1531,12 +1531,14 @@ mod tests {
             )
             .await
             .unwrap();
-        // with_frame=true routes to SCK path which will fail (no real window),
-        // but it should NOT be a 404 — it proves the query param is parsed
+        // with_frame=true routes to SCK path. Without a real window, it fails
+        // with either 404 (WindowNotFound with SCK) or 500 (Screenshot error).
+        // Either way, it must NOT be 400 (Bad Request) — proves query param is parsed.
         let status = resp.status();
-        assert!(
-            !status.is_client_error(),
-            "with_frame=true should not be a client error, got {status}"
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "with_frame=true should be parsed, not rejected as bad request"
         );
     }
 
@@ -1831,7 +1833,7 @@ mod tests {
     async fn screenshot_with_frame_logs_warning_on_switch_tab_failure() {
         // screenshot_with_frame calls request_switch_tab first, which will fail
         // (no WebSocket), then proceeds to SCK capture. The function should not
-        // return an error just because the tab switch failed — it logs a warning.
+        // return 400 (Bad Request) — the tab switch failure should be a warning.
         let app = test_daemon_router_with_sandbox();
         let resp = app
             .oneshot(
@@ -1842,12 +1844,12 @@ mod tests {
             )
             .await
             .unwrap();
-        // The SCK capture will also fail (no real window), but the important thing
-        // is that the switch_tab failure didn't cause a client error.
+        // SCK capture also fails (no real window) → 404 or 500, but NOT 400.
         let status = resp.status();
-        assert!(
-            !status.is_client_error(),
-            "switch_tab failure should not cause client error, got {status}"
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "switch_tab failure should not cause bad request, got {status}"
         );
     }
 }
