@@ -523,6 +523,9 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
                     println!(" 完成");
                     break;
                 }
+                Err(e) => {
+                    tracing::trace!("[start] readyz check failed (will retry): {e}");
+                }
                 _ => {}
             }
 

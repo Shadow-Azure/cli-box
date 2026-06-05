@@ -60,6 +60,7 @@ pub async fn daemon_readiness() -> Result<DaemonReadinessResponse> {
     let client = reqwest_client();
     let resp = client
         .get(format!("{base}/readyz"))
+        .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
         .with_context(|| "Failed to connect to daemon readyz endpoint")?;
