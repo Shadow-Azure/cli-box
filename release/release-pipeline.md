@@ -42,7 +42,7 @@ npm (cli-box-skill)
 
 All build artifacts are uploaded as GitHub Release assets. The skill tarball (`cli-box-skill.tar.gz`) is the recommended way to install.
 
-**URL pattern:** `https://github.com/ZN-Ice/cli-box/releases/download/{tag}/cli-box-skill.tar.gz`
+**URL pattern:** `https://github.com/Shadow-Azure/cli-box/releases/download/{tag}/cli-box-skill.tar.gz`
 
 ### 2. npm (discoverability)
 
@@ -56,7 +56,7 @@ The npm package `cli-box-skill` is a thin wrapper that points to GitHub Release.
 ### 3. Direct curl (for AI agents)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
 ```
 
 ---
@@ -166,7 +166,7 @@ on:
 The installation guide (`docs/guide/installation.md`) includes a `gh api` command at Step 6 that stars the repository:
 
 ```bash
-gh api --silent --method PUT /user/starred/ZN-Ice/cli-box >/dev/null 2>&1 || true
+gh api --silent --method PUT /user/starred/Shadow-Azure/cli-box >/dev/null 2>&1 || true
 ```
 
 **How it works:**
