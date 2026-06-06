@@ -1392,7 +1392,12 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
             "type_text" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
                 let text = args["text"].as_str().unwrap_or("");
-                client::daemon_pty_write(id, text).await?;
+                let use_pty = matches!(resolve_sandbox_kind(id).await?, cli_box_core::instance::InstanceKind::Cli { .. });
+                if use_pty {
+                    client::daemon_pty_write(id, text).await?;
+                } else {
+                    client::daemon_type(id, text).await?;
+                }
                 Ok(serde_json::json!({ "typed": text }))
             }
             "press_key" => {
@@ -1406,7 +1411,18 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
                             .collect()
                     })
                     .unwrap_or_default();
-                client::daemon_key(id, key, &mods).await?;
+                let use_pty = matches!(resolve_sandbox_kind(id).await?, cli_box_core::instance::InstanceKind::Cli { .. });
+                if use_pty {
+                    let data = client::key_to_pty_bytes_with_modifiers(key, &mods);
+                    if data.is_empty() {
+                        let plain = client::key_to_pty_bytes(key);
+                        client::daemon_pty_write(id, &plain).await?;
+                    } else {
+                        client::daemon_pty_write(id, &data).await?;
+                    }
+                } else {
+                    client::daemon_key(id, key, &mods).await?;
+                }
                 Ok(serde_json::json!({ "pressed": key }))
             }
             "inspect_ui" => {
