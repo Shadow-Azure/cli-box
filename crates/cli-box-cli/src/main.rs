@@ -56,9 +56,6 @@ enum Commands {
         #[arg(long)]
         id: String,
 
-        /// Use PTY write instead of CGEvent (more reliable for CLI processes)
-        #[arg(long)]
-        pty: bool,
     },
 
     /// Press a key in a sandbox
@@ -234,8 +231,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Close { id } => {
             cmd_close_daemon(&id).await?;
         }
-        Commands::TypeText { text, id, pty } => {
-            cmd_type_daemon(&text, &id, pty).await?;
+        Commands::TypeText { text, id } => {
+            cmd_type_daemon(&text, &id).await?;
         }
         Commands::Key {
             key,
@@ -606,15 +603,26 @@ async fn cmd_close_daemon(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Query the daemon to determine a sandbox's InstanceKind.
+async fn resolve_sandbox_kind(id: &str) -> anyhow::Result<cli_box_core::instance::InstanceKind> {
+    let sandboxes = client::daemon_list_sandboxes().await?;
+    sandboxes
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.kind.clone())
+        .ok_or_else(|| anyhow::anyhow!("Sandbox '{}' not found", id))
+}
+
 /// Type text in a sandbox via the daemon API.
-async fn cmd_type_daemon(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
+async fn cmd_type_daemon(text: &str, id: &str) -> anyhow::Result<()> {
+    let use_pty = matches!(resolve_sandbox_kind(id).await?, cli_box_core::instance::InstanceKind::Cli { .. });
     tracing::info!(
-        "[cli] type: text_len={}, id={}, pty={}",
+        "[cli] type: text_len={}, id={}, use_pty={}",
         text.len(),
         id,
-        pty
+        use_pty
     );
-    if pty {
+    if use_pty {
         client::daemon_pty_write(id, text).await?;
         println!("Typed (PTY): {:?} -> sandbox {}", text, id);
     } else {
