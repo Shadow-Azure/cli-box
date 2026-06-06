@@ -136,6 +136,8 @@ struct RegionQuery {
 struct ScreenshotQuery {
     #[serde(default)]
     window_id: Option<u32>,
+    #[serde(default)]
+    with_frame: bool,
 }
 
 #[derive(Deserialize)]
@@ -406,6 +408,11 @@ async fn screenshot_handler(
     let window_id = q.window_id.or(state.lock().await.window_id);
     match window_id {
         Some(id) => {
+            if !q.with_frame {
+                return Err(AppError::Screenshot(
+                    "Default screenshot is not supported in legacy mode. Use ?with_frame=true (requires Screen Recording permission).".to_string()
+                ));
+            }
             let png_data = ScreenCapture::capture_window(id)?;
             Ok((StatusCode::OK, [("content-type", "image/png")], png_data).into_response())
         }
@@ -1343,7 +1350,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn standalone_rejects_screenshot() {
+    async fn standalone_rejects_screenshot_without_with_frame() {
         let app = test_router();
         let resp = app
             .oneshot(
@@ -1354,12 +1361,31 @@ mod tests {
             )
             .await
             .unwrap();
-        // When window_id is Some(42) in test state, screenshot tries to capture
-        // which fails on non-macOS or without permissions, returning 404 or 500
+        // Without ?with_frame=true, legacy server returns 500 with guidance message
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("with_frame"));
+    }
+
+    #[tokio::test]
+    async fn screenshot_with_frame_attempts_capture() {
+        let app = test_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/screenshot?with_frame=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // with_frame=true attempts SCK capture, may succeed (200), fail with
+        // permission error (500), or window-not-found (404) in test env
         let status = resp.status();
         assert!(
             matches!(status.as_u16(), 200 | 404 | 500),
-            "unexpected status: {status}"
+            "with_frame=true should attempt capture, got {status}"
         );
     }
 
@@ -1395,12 +1421,12 @@ mod tests {
 
     #[tokio::test]
     async fn screenshot_with_query_window_id() {
-        // Test that window_id from query parameter is used
+        // Test that window_id from query parameter is used when with_frame=true
         let app = test_router();
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/screenshot?window_id=999")
+                    .uri("/screenshot?window_id=999&with_frame=true")
                     .body(Body::empty())
                     .unwrap(),
             )

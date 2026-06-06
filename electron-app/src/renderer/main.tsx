@@ -136,7 +136,23 @@ function App() {
       ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === "capture_request") {
+          if (msg.type === "switch_tab_request") {
+            const { sandbox_id, request_id } = msg;
+            // Switch tab via IPC so main process repositions WebContentsView
+            try {
+              await window.sandbox.switchTab(sandbox_id);
+            } catch {
+              // fallback: update React state only
+              setActiveTabId(sandbox_id);
+            }
+            // Small delay for tab to render
+            await new Promise((r) => setTimeout(r, 200));
+            ws?.send(JSON.stringify({
+              type: "switch_tab_response",
+              request_id,
+              sandbox_id,
+            }));
+          } else if (msg.type === "capture_request") {
             const { sandbox_id, request_id } = msg;
             const tabRef = terminalRefs.current.get(sandbox_id);
             if (tabRef?.current) {

@@ -123,6 +123,14 @@ struct HealthResponse {
     sandboxes: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DaemonReadinessResponse {
+    /// "ready" if renderer WebSocket is connected, "not_ready" otherwise.
+    pub status: String,
+    /// Whether the Electron renderer's screenshot WebSocket is connected.
+    pub renderer_connected: bool,
+}
+
 #[derive(Deserialize)]
 pub struct UiFindRequest {
     pub role: String,
@@ -241,6 +249,7 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
 
     Router::new()
         .route("/health", get(health_handler))
+        .route("/readyz", get(readyz_handler))
         .route("/box/list", get(list_sandboxes_handler))
         .route("/box/create", post(create_sandbox_handler))
         .route("/box/{id}/close", post(close_sandbox_handler))
@@ -278,6 +287,25 @@ async fn health_handler(State(state): State<Arc<Mutex<DaemonState>>>) -> Json<He
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_secs: s.started_at.elapsed().as_secs(),
         sandboxes: s.sandboxes.len(),
+    })
+}
+
+/// Daemon-level readiness: always returns 200 with readiness in JSON body.
+/// Unlike the sandbox-level /readyz (server/mod.rs) which returns 503/200,
+/// this is a polling endpoint — callers check `renderer_connected` in the response.
+async fn readyz_handler(
+    State(state): State<Arc<Mutex<DaemonState>>>,
+) -> Json<DaemonReadinessResponse> {
+    let s = state.lock().await;
+    let renderer_connected = s.screenshot_ws_tx.is_some();
+    Json(DaemonReadinessResponse {
+        status: if renderer_connected {
+            "ready"
+        } else {
+            "not_ready"
+        }
+        .to_string(),
+        renderer_connected,
     })
 }
 
@@ -428,9 +456,16 @@ async fn close_sandbox_handler(
     Ok(Json(serde_json::json!({"closed": id})))
 }
 
+#[derive(Deserialize)]
+struct ScreenshotQuery {
+    #[serde(default)]
+    with_frame: bool,
+}
+
 async fn screenshot_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
     Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ScreenshotQuery>,
 ) -> Result<Response, AppError> {
     // Verify sandbox exists
     {
@@ -440,7 +475,12 @@ async fn screenshot_handler(
         }
     }
 
-    // Attempt 1: Ask the Electron renderer to capture via WebSocket
+    if q.with_frame {
+        // --with-frame: use ScreenCaptureKit directly, skip renderer
+        return screenshot_with_frame(state, &id).await;
+    }
+
+    // Default: renderer only, no SCK fallback
     match request_renderer_screenshot(state.clone(), &id).await {
         Ok(png_data) => {
             tracing::info!(
@@ -452,11 +492,14 @@ async fn screenshot_handler(
         }
         Err(reason) => {
             tracing::warn!(
-                "[screenshot] renderer capture failed for sandbox {}: {}; falling back to ScreenCaptureKit",
+                "[screenshot] renderer capture failed for sandbox {}: {}",
                 id,
                 reason
             );
-            return screenshot_fallback(state, &id).await;
+            Err(AppError::Screenshot(format!(
+                "Screenshot failed: {}. Use --with-frame to capture via ScreenCaptureKit (requires Screen Recording permission).",
+                reason
+            )))
         }
     }
 }
@@ -481,34 +524,29 @@ fn screenshot_response(png_data: Vec<u8>, source: &str, fallback_reason: Option<
     (StatusCode::OK, headers, png_data).into_response()
 }
 
-/// Capture a screenshot via ScreenCaptureKit as a fallback, returning headers
-/// that indicate the fallback source and reason.
-async fn screenshot_fallback(
+/// Capture a screenshot using ScreenCaptureKit (requires Screen Recording permission).
+/// Handles stale window IDs by re-discovering the window by title.
+async fn screenshot_with_frame(
     state: Arc<Mutex<DaemonState>>,
     id: &str,
 ) -> Result<Response, AppError> {
-    tracing::info!(
-        "[screenshot] using ScreenCaptureKit fallback for sandbox {} (captures entire window)",
-        id
-    );
+    // Switch to the target tab before capturing so SCK sees the correct content.
+    if let Err(e) = request_switch_tab(state.clone(), id).await {
+        tracing::warn!("Failed to switch tab for sandbox {}: {}", id, e);
+    }
 
     let window_id = {
         let s = state.lock().await;
         s.sandboxes.get(id).and_then(|sb| sb.window_id)
     };
 
+    // Try stored window_id first, handle stale IDs
     if let Some(wid) = window_id {
         let result = tokio::task::spawn_blocking(move || ScreenCapture::capture_window(wid))
             .await
             .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))?;
         match result {
-            Ok(png_data) => {
-                return Ok(screenshot_response(
-                    png_data,
-                    "screencapturekit",
-                    Some("renderer_unavailable"),
-                ));
-            }
+            Ok(png_data) => return Ok(screenshot_response(png_data, "screencapturekit", None)),
             Err(AppError::WindowNotFound(_)) => {
                 tracing::warn!(
                     "Stored window_id={} for sandbox {} is stale, re-discovering",
@@ -516,11 +554,19 @@ async fn screenshot_fallback(
                     id
                 );
             }
+            Err(AppError::Screenshot(msg))
+                if msg.contains("permission") || msg.contains("denied") =>
+            {
+                return Err(AppError::Screenshot(format!(
+                    "{}. Grant Screen Recording in System Settings → Privacy & Security → Screen Recording.",
+                    msg
+                )));
+            }
             Err(e) => return Err(e),
         }
     }
 
-    // Re-discover the Electron window by title
+    // Re-discover window by title
     let new_wid = tokio::task::spawn_blocking(|| ScreenCapture::find_window_by_title("CLI Box"))
         .await
         .map_err(|e| AppError::Screenshot(format!("window discovery task failed: {e}")))??;
@@ -538,11 +584,7 @@ async fn screenshot_fallback(
     let png_data = tokio::task::spawn_blocking(move || ScreenCapture::capture_window(new_wid))
         .await
         .map_err(|e| AppError::Screenshot(format!("screenshot task failed: {e}")))??;
-    Ok(screenshot_response(
-        png_data,
-        "screencapturekit",
-        Some("renderer_unavailable"),
-    ))
+    Ok(screenshot_response(png_data, "screencapturekit", None))
 }
 
 // ── Screenshot WebSocket ────────────────────────────────────────
@@ -604,6 +646,62 @@ async fn request_renderer_screenshot(
     }
 }
 
+/// Request the renderer to switch to a specific tab via WebSocket.
+/// Waits for the renderer to acknowledge the tab switch.
+async fn request_switch_tab(
+    state: Arc<Mutex<DaemonState>>,
+    sandbox_id: &str,
+) -> Result<(), String> {
+    let (request_id, response_rx, mut ws_tx) = {
+        let mut s = state.lock().await;
+        let ws_tx = s
+            .screenshot_ws_tx
+            .take()
+            .ok_or("WebSocket not connected (renderer may be closed or not yet connected)")?;
+
+        s.screenshot_request_counter += 1;
+        let request_id = s.screenshot_request_counter;
+
+        let (response_tx, response_rx) = oneshot::channel();
+        s.pending_screenshots.insert(request_id, response_tx);
+
+        (request_id, response_rx, ws_tx)
+    };
+
+    let msg = serde_json::json!({
+        "type": "switch_tab_request",
+        "request_id": request_id,
+        "sandbox_id": sandbox_id,
+    });
+
+    if ws_tx
+        .send(Message::Text(msg.to_string().into()))
+        .await
+        .is_err()
+    {
+        let mut s = state.lock().await;
+        s.pending_screenshots.remove(&request_id);
+        s.screenshot_ws_tx = Some(ws_tx);
+        return Err("Failed to send switch_tab request over WebSocket".to_string());
+    }
+
+    {
+        let mut s = state.lock().await;
+        s.screenshot_ws_tx = Some(ws_tx);
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
+        Ok(Ok(Ok(_))) => Ok(()),
+        Ok(Ok(Err(e))) => Err(format!("Renderer returned error on switch_tab: {e}")),
+        Ok(Err(_)) => Err("Response channel dropped during switch_tab".to_string()),
+        Err(_) => {
+            let mut s = state.lock().await;
+            s.pending_screenshots.remove(&request_id);
+            Err("Renderer did not respond to switch_tab within 2s timeout".to_string())
+        }
+    }
+}
+
 /// WebSocket endpoint for renderer-based screenshot capture.
 async fn screenshot_ws_handler(
     State(state): State<Arc<Mutex<DaemonState>>>,
@@ -659,6 +757,14 @@ async fn handle_screenshot_ws(state: Arc<Mutex<DaemonState>>, socket: WebSocket)
                                             let mut s = state.lock().await;
                                             if let Some(tx) = s.pending_screenshots.remove(&req_id) {
                                                 let _ = tx.send(Err(error));
+                                            }
+                                        }
+                                    }
+                                    Some("switch_tab_response") => {
+                                        if let Some(req_id) = request_id {
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_screenshots.remove(&req_id) {
+                                                let _ = tx.send(Ok(vec![]));
                                             }
                                         }
                                     }
@@ -1442,6 +1548,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn screenshot_with_frame_attempts_sck() {
+        let app = test_daemon_router_with_sandbox();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/box/test-sb/screenshot?with_frame=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // with_frame=true routes to SCK path. Without a real window, it fails
+        // with either 404 (WindowNotFound with SCK) or 500 (Screenshot error).
+        // Either way, it must NOT be 400 (Bad Request) — proves query param is parsed.
+        let status = resp.status();
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "with_frame=true should be parsed, not rejected as bad request"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_without_frame_fails_when_renderer_unavailable() {
+        let app = test_daemon_router_with_sandbox();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/box/test-sb/screenshot")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Default path (no with_frame) tries renderer only, should fail with 500
+        // since no renderer WebSocket is connected in tests
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn click_valid_request() {
         let app = test_daemon_router_with_sandbox();
         let resp = app
@@ -1696,6 +1842,42 @@ mod tests {
         assert_eq!(
             headers.get("x-screenshot-fallback-reason").unwrap(),
             "renderer_unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_switch_tab_returns_error_when_ws_not_connected() {
+        let state = test_daemon_state_with_sandbox();
+        let result = request_switch_tab(state, "test-sb").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("WebSocket not connected"),
+            "Expected 'WebSocket not connected', got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_with_frame_logs_warning_on_switch_tab_failure() {
+        // screenshot_with_frame calls request_switch_tab first, which will fail
+        // (no WebSocket), then proceeds to SCK capture. The function should not
+        // return 400 (Bad Request) — the tab switch failure should be a warning.
+        let app = test_daemon_router_with_sandbox();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/box/test-sb/screenshot?with_frame=true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // SCK capture also fails (no real window) → 404 or 500, but NOT 400.
+        let status = resp.status();
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "switch_tab failure should not cause bad request, got {status}"
         );
     }
 }

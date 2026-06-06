@@ -109,6 +109,10 @@ enum Commands {
         /// Window ID to capture (overrides auto-detection)
         #[arg(long)]
         window_id: Option<u32>,
+
+        /// Use ScreenCaptureKit to capture the full window frame (requires Screen Recording permission)
+        #[arg(long)]
+        with_frame: bool,
     },
 
     /// List all visible windows on the system
@@ -248,8 +252,9 @@ async fn main() -> anyhow::Result<()> {
             output,
             id,
             window_id: _window_id,
+            with_frame,
         } => {
-            cmd_screenshot_daemon(&output, id.as_deref()).await?;
+            cmd_screenshot_daemon(&output, id.as_deref(), with_frame).await?;
         }
         Commands::Windows => {
             cmd_windows()?;
@@ -477,16 +482,59 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
 
     // Spawn Electron only if not already running.
     // If already running, the renderer polls /box/list and will pick up the new sandbox.
-    if find_running_electron() {
+    let electron_newly_spawned = if find_running_electron() {
         tracing::info!("[start] Electron already running, skipping spawn");
+        false
     } else if let Some(electron_bin) = find_electron_binary() {
         tracing::info!("[start] spawning Electron: {}", electron_bin.display());
         let _child = Command::new(&electron_bin)
             .spawn()
             .context("Failed to launch Electron app")?;
         tracing::info!("[start] Electron launched");
+        true
     } else {
         tracing::warn!("[start] Electron app not found, running in headless daemon mode");
+        false
+    };
+
+    // Wait for renderer WebSocket to connect if Electron was newly spawned.
+    if electron_newly_spawned {
+        print!("正在启动");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+
+        let timeout = std::time::Duration::from_secs(60);
+        let start = std::time::Instant::now();
+        let poll_interval = std::time::Duration::from_secs(1);
+        let mut dot_count: u8 = 0;
+
+        loop {
+            if start.elapsed() > timeout {
+                println!();
+                tracing::warn!(
+                    "[start] Renderer WebSocket did not connect within {}s, continuing anyway",
+                    timeout.as_secs()
+                );
+                break;
+            }
+
+            match client::daemon_readiness().await {
+                Ok(resp) if resp.renderer_connected => {
+                    println!(" 完成");
+                    break;
+                }
+                Err(e) => {
+                    tracing::trace!("[start] readyz check failed (will retry): {e}");
+                }
+                _ => {}
+            }
+
+            dot_count = (dot_count % 3) + 1;
+            print!("\r正在启动{:<3}", ".".repeat(dot_count as usize));
+            let _ = std::io::stdout().flush();
+
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     Ok(())
@@ -638,23 +686,29 @@ async fn cmd_click_daemon(x: f64, y: f64, id: &str, button: &str) -> anyhow::Res
 }
 
 /// Take a screenshot via the daemon API.
-async fn cmd_screenshot_daemon(output: &std::path::Path, id: Option<&str>) -> anyhow::Result<()> {
+async fn cmd_screenshot_daemon(
+    output: &std::path::Path,
+    id: Option<&str>,
+    with_frame: bool,
+) -> anyhow::Result<()> {
     let sandbox_id = id.ok_or_else(|| {
         anyhow::anyhow!(
             "--id is required for screenshots. Use: cli-box screenshot --id <sandbox-id>"
         )
     })?;
 
-    let result = client::daemon_screenshot(sandbox_id).await?;
+    let result = client::daemon_screenshot(sandbox_id, with_frame).await?;
 
     if result.source.as_deref() == Some("screencapturekit") {
-        eprintln!(
-            "Warning: screenshot used ScreenCaptureKit fallback (captured entire window).\n  Reason: {}",
-            result.fallback_reason.as_deref().unwrap_or("unknown")
-        );
-        eprintln!("  For terminal-only screenshots, ensure the Electron app is connected.");
+        eprintln!("Screenshot captured with ScreenCaptureKit (full window frame).");
     }
 
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {:?}", parent))?;
+        }
+    }
     std::fs::write(output, &result.png_data)
         .with_context(|| format!("Failed to write screenshot to {:?}", output))?;
     println!(
@@ -1193,11 +1247,12 @@ fn mcp_tools() -> serde_json::Value {
             },
             {
                 "name": "screenshot_sandbox",
-                "description": "Take a screenshot of a sandbox (returns base64 PNG)",
+                "description": "Take a screenshot of a sandbox (returns base64 PNG). Default: renderer capture (no permission needed). Use with_frame=true for full window capture (requires Screen Recording permission).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "sandbox_id": { "type": "string" }
+                        "sandbox_id": { "type": "string" },
+                        "with_frame": { "type": "boolean", "description": "Use ScreenCaptureKit for full window frame capture (requires Screen Recording permission)", "default": false }
                     },
                     "required": ["sandbox_id"]
                 }
@@ -1318,7 +1373,8 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
             }
             "screenshot_sandbox" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
-                let result = client::daemon_screenshot(id).await?;
+                let with_frame = args["with_frame"].as_bool().unwrap_or(false);
+                let result = client::daemon_screenshot(id, with_frame).await?;
                 let b64 = base64_encode(&result.png_data);
                 let mut response = serde_json::json!({ "sandbox_id": id, "image_base64": b64 });
                 if let Some(ref source) = result.source {
@@ -1709,5 +1765,23 @@ mod tests {
         } else {
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    #[test]
+    fn screenshot_output_creates_parent_directories() {
+        let tmp = std::env::temp_dir().join(format!("cli_box_test_{}", std::process::id()));
+        let nested = tmp.join("a").join("b").join("c").join("shot.png");
+
+        // Simulate the logic from cmd_screenshot_daemon
+        let output = nested.as_path();
+        if let Some(parent) = output.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+        }
+        std::fs::write(output, b"\x89PNG").unwrap();
+
+        assert!(nested.exists(), "File should exist at nested path");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
