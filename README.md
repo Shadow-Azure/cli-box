@@ -12,12 +12,12 @@
 
 **macOS desktop automation sandbox for AI agents**
 
-[![GitHub Release](https://img.shields.io/github/v/release/ZN-Ice/cli-box?color=369eff&labelColor=black&logo=github&style=flat-square)](https://github.com/ZN-Ice/cli-box/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-white?labelColor=black&style=flat-square)](https://github.com/ZN-Ice/cli-box/blob/main/LICENSE)
-[![macOS](https://img.shields.io/badge/platform-macOS%2014%2B-black?style=flat-square&logo=apple)](https://github.com/ZN-Ice/cli-box)
-[![GitHub Stars](https://img.shields.io/github/stars/ZN-Ice/cli-box?color=ffcb47&labelColor=black&style=flat-square)](https://github.com/ZN-Ice/cli-box/stargazers)
+[![GitHub Release](https://img.shields.io/github/v/release/Shadow-Azure/cli-box?color=369eff&labelColor=black&logo=github&style=flat-square)](https://github.com/Shadow-Azure/cli-box/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-white?labelColor=black&style=flat-square)](https://github.com/Shadow-Azure/cli-box/blob/main/LICENSE)
+[![macOS](https://img.shields.io/badge/platform-macOS%2014%2B-black?style=flat-square&logo=apple)](https://github.com/Shadow-Azure/cli-box)
+[![GitHub Stars](https://img.shields.io/github/stars/Shadow-Azure/cli-box?color=ffcb47&labelColor=black&style=flat-square)](https://github.com/Shadow-Azure/cli-box/stargazers)
 
-[![cli-box preview — Claude Code running in sandbox](./.github/assets/hero.png)](https://github.com/ZN-Ice/cli-box#cli-box)
+[![cli-box preview — Claude Code running in sandbox](./.github/assets/hero.png)](https://github.com/Shadow-Azure/cli-box#cli-box)
 
 </div>
 
@@ -28,8 +28,8 @@
 | You want | Run | What happens |
 | :--- | :--- | :--- |
 | **npm** | `npm install -g cli-box-skill` | Binaries + skill installed automatically |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/skill/install.sh)` | Downloads to `~/.cli-box/bin/`, installs skill |
-| **Manual** | [GitHub Releases](https://github.com/ZN-Ice/cli-box/releases) | Download and extract manually |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)` | Downloads to `~/.cli-box/bin/`, installs skill |
+| **Manual** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | Download and extract manually |
 
 ### For Humans
 
@@ -37,7 +37,7 @@ Paste this into **Claude Code** — it will download, install, configure permiss
 
 ```
 Install cli-box by following the instructions here:
-https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
+https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
 ```
 
 > The agent handles macOS permissions, PATH setup, and a quick test run. Just approve when prompted.
@@ -45,7 +45,7 @@ https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
 ### For LLM Agents
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
+curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
 ```
 
 Follow the guide step by step.
@@ -68,17 +68,17 @@ Sandbox started: 0cd60ad4
 $ cli-box screenshot --id 0cd60ad4 -o state.png
 ```
 
-[![Claude Code sandbox — trust dialog](./.github/assets/demo-claude-start.png)](https://github.com/ZN-Ice/cli-box#demo)
+[![Claude Code sandbox — trust dialog](./.github/assets/demo-claude-start.png)](https://github.com/Shadow-Azure/cli-box#demo)
 
-[![Claude Code responds in sandbox](./.github/assets/demo-claude-reply.png)](https://github.com/ZN-Ice/cli-box#demo)
+[![Claude Code responds in sandbox](./.github/assets/demo-claude-reply.png)](https://github.com/Shadow-Azure/cli-box#demo)
 
 **Multi-tab — run Claude Code, OpenCode, zsh in parallel:**
 
-[![Multi-tab sandboxes](./.github/assets/demo-multi-tab.png)](https://github.com/ZN-Ice/cli-box#demo)
+[![Multi-tab sandboxes](./.github/assets/demo-multi-tab.png)](https://github.com/Shadow-Azure/cli-box#demo)
 
 **Works with any CLI tool:**
 
-[![OpenCode in sandbox](./.github/assets/demo-opencode.png)](https://github.com/ZN-Ice/cli-box#demo)
+[![OpenCode in sandbox](./.github/assets/demo-opencode.png)](https://github.com/Shadow-Azure/cli-box#demo)
 
 ```bash
 cli-box start claude    # Claude Code
@@ -136,4 +136,4 @@ Add `cli-box` and `CLI Box.app` to both lists. Permissions must be granted manua
 
 ---
 
-[中文文档](README.zh-cn.md) · [GitHub Issues](https://github.com/ZN-Ice/cli-box/issues)
+[中文文档](README.zh-cn.md) · [GitHub Issues](https://github.com/Shadow-Azure/cli-box/issues)

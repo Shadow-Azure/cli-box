@@ -16,12 +16,12 @@
 
 **macOS 桌面自动化沙箱 — AI Agent 专用**
 
-[![GitHub Release](https://img.shields.io/github/v/release/ZN-Ice/cli-box?color=369eff&labelColor=black&logo=github&style=flat-square)](https://github.com/ZN-Ice/cli-box/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-white?labelColor=black&style=flat-square)](https://github.com/ZN-Ice/cli-box/blob/main/LICENSE)
-[![macOS](https://img.shields.io/badge/platform-macOS%2014%2B-black?style=flat-square&logo=apple)](https://github.com/ZN-Ice/cli-box)
-[![GitHub Stars](https://img.shields.io/github/stars/ZN-Ice/cli-box?color=ffcb47&labelColor=black&style=flat-square)](https://github.com/ZN-Ice/cli-box/stargazers)
+[![GitHub Release](https://img.shields.io/github/v/release/Shadow-Azure/cli-box?color=369eff&labelColor=black&logo=github&style=flat-square)](https://github.com/Shadow-Azure/cli-box/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-white?labelColor=black&style=flat-square)](https://github.com/Shadow-Azure/cli-box/blob/main/LICENSE)
+[![macOS](https://img.shields.io/badge/platform-macOS%2014%2B-black?style=flat-square&logo=apple)](https://github.com/Shadow-Azure/cli-box)
+[![GitHub Stars](https://img.shields.io/github/stars/Shadow-Azure/cli-box?color=ffcb47&labelColor=black&style=flat-square)](https://github.com/Shadow-Azure/cli-box/stargazers)
 
-[![cli-box 预览 — Claude Code 在沙箱中运行](./.github/assets/hero.png)](https://github.com/ZN-Ice/cli-box#cli-box)
+[![cli-box 预览 — Claude Code 在沙箱中运行](./.github/assets/hero.png)](https://github.com/Shadow-Azure/cli-box#cli-box)
 
 </div>
 
@@ -32,8 +32,8 @@
 | 你想 | 运行 | 效果 |
 | :--- | :--- | :--- |
 | **npm** | `npm install -g cli-box-skill` | 自动安装二进制 + skill |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/skill/install.sh)` | 下载到 `~/.cli-box/bin/`，安装 skill |
-| **手动** | [GitHub Releases](https://github.com/ZN-Ice/cli-box/releases) | 手动下载解压 |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)` | 下载到 `~/.cli-box/bin/`，安装 skill |
+| **手动** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | 手动下载解压 |
 
 ### 给人类用户
 
@@ -41,7 +41,7 @@
 
 ```
 Install cli-box by following the instructions here:
-https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
+https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
 ```
 
 > Agent 会处理 macOS 权限、PATH 配置和快速测试。只需在提示时确认即可。
@@ -49,7 +49,7 @@ https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
 ### 给 LLM Agent
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/docs/guide/installation.md
+curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
 ```
 
 按指引逐步执行。
@@ -72,17 +72,17 @@ Sandbox started: 0cd60ad4
 $ cli-box screenshot --id 0cd60ad4 -o state.png
 ```
 
-[![Claude Code 沙箱 — 信任对话框](./.github/assets/demo-claude-start.png)](https://github.com/ZN-Ice/cli-box#演示)
+[![Claude Code 沙箱 — 信任对话框](./.github/assets/demo-claude-start.png)](https://github.com/Shadow-Azure/cli-box#演示)
 
-[![Claude Code 在沙箱中回复](./.github/assets/demo-claude-reply.png)](https://github.com/ZN-Ice/cli-box#演示)
+[![Claude Code 在沙箱中回复](./.github/assets/demo-claude-reply.png)](https://github.com/Shadow-Azure/cli-box#演示)
 
 **多 Tab — 同时运行 Claude Code、OpenCode、zsh：**
 
-[![多 Tab 沙箱](./.github/assets/demo-multi-tab.png)](https://github.com/ZN-Ice/cli-box#演示)
+[![多 Tab 沙箱](./.github/assets/demo-multi-tab.png)](https://github.com/Shadow-Azure/cli-box#演示)
 
 **支持任意 CLI 工具：**
 
-[![OpenCode 在沙箱中](./.github/assets/demo-opencode.png)](https://github.com/ZN-Ice/cli-box#演示)
+[![OpenCode 在沙箱中](./.github/assets/demo-opencode.png)](https://github.com/Shadow-Azure/cli-box#演示)
 
 ```bash
 cli-box start claude    # Claude Code
@@ -140,4 +140,4 @@ cli-box click --id <id> 100 200
 
 ---
 
-[English](README.md) · [GitHub Issues](https://github.com/ZN-Ice/cli-box/issues)
+[English](README.md) · [GitHub Issues](https://github.com/Shadow-Azure/cli-box/issues)

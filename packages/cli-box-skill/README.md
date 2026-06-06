@@ -25,14 +25,14 @@ cli-box close <id>      # Close sandbox
 ## No npm?
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
 ```
 
 ## Links
 
-- [GitHub](https://github.com/ZN-Ice/cli-box)
-- [Full README](https://github.com/ZN-Ice/cli-box#readme)
-- [Installation Guide](https://github.com/ZN-Ice/cli-box/blob/main/docs/guide/installation.md)
+- [GitHub](https://github.com/Shadow-Azure/cli-box)
+- [Full README](https://github.com/Shadow-Azure/cli-box#readme)
+- [Installation Guide](https://github.com/Shadow-Azure/cli-box/blob/main/docs/guide/installation.md)
 
 ## License
 

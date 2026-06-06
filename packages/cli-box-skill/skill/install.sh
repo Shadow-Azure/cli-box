@@ -4,7 +4,7 @@ set -euo pipefail
 # cli-box skill installer
 # Downloads binaries from GitHub Release and sets up skill files
 
-REPO="ZN-Ice/cli-box"
+REPO="Shadow-Azure/cli-box"
 VERSION="${CLI_BOX_VERSION:-latest}"
 INSTALL_DIR="$HOME/.cli-box/bin"
 SKILL_CLAUDE_DIR="$HOME/.claude/skills/cli-box"

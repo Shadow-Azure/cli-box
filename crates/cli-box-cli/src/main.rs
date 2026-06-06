@@ -1627,7 +1627,7 @@ fn find_electron_binary() -> Option<PathBuf> {
     // Download from GitHub Release
     let version = env!("CARGO_PKG_VERSION");
     let url = format!(
-        "https://github.com/ZN-Ice/cli-box/releases/download/v{}/CLI-Box-app-macos-arm64.tar.gz",
+        "https://github.com/Shadow-Azure/cli-box/releases/download/v{}/CLI-Box-app-macos-arm64.tar.gz",
         version
     );
     tracing::warn!("Electron app not found. Downloading from {}...", url);
