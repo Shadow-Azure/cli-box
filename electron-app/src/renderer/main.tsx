@@ -44,6 +44,7 @@ function App() {
   const [showWindowCloseDialog, setShowWindowCloseDialog] = useState(false);
   const refreshTimer = useRef<ReturnType<typeof setInterval>>();
   const terminalRefs = useRef<Map<string, React.RefObject<SandboxTerminalHandle>>>(new Map());
+  const screenshotWsRef = useRef<WebSocket | null>(null);
 
   // Apply theme
   useEffect(() => {
@@ -127,10 +128,35 @@ function App() {
       if (unmounted) return;
 
       ws = new WebSocket(`ws://127.0.0.1:${port}/screenshot/ws`);
+      screenshotWsRef.current = ws;
 
       ws.onopen = () => {
         console.log("[screenshot-ws] connected");
         reconnectDelay = 1000; // Reset backoff on successful connection
+        // Notify daemon that existing terminals are ready
+        for (const tab of tabsRef.current) {
+          const ref = terminalRefs.current.get(tab.id);
+          if (ref?.current) {
+            ws?.send(JSON.stringify({
+              type: "terminal_ready",
+              sandbox_id: tab.id,
+            }));
+          }
+        }
+        // Periodically notify daemon about ready terminals (handles newly created tabs)
+        const readyInterval = setInterval(() => {
+          if (ws?.readyState !== WebSocket.OPEN) return;
+          for (const tab of tabsRef.current) {
+            const ref = terminalRefs.current.get(tab.id);
+            if (ref?.current) {
+              ws.send(JSON.stringify({
+                type: "terminal_ready",
+                sandbox_id: tab.id,
+              }));
+            }
+          }
+        }, 2000);
+        (ws as any)._readyInterval = readyInterval;
       };
 
       ws.onmessage = async (event) => {
@@ -188,6 +214,7 @@ function App() {
 
       ws.onclose = () => {
         console.log("[screenshot-ws] disconnected");
+        if ((ws as any)._readyInterval) clearInterval((ws as any)._readyInterval);
         if (!unmounted) {
           console.log(`[screenshot-ws] reconnecting in ${reconnectDelay}ms...`);
           reconnectTimeout = setTimeout(() => {
@@ -206,6 +233,8 @@ function App() {
 
     return () => {
       unmounted = true;
+      screenshotWsRef.current = null;
+      if ((ws as any)._readyInterval) clearInterval((ws as any)._readyInterval);
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (ws) ws.close();
     };
@@ -340,7 +369,20 @@ function App() {
 
             return (
               <div key={tab.id} style={{ ...hiddenStyle, display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-                <SandboxTerminal ref={tabRef} sandboxId={tab.id} ptyPid={tab.sandbox.pty_pid!} />
+                <SandboxTerminal
+                  ref={tabRef}
+                  sandboxId={tab.id}
+                  ptyPid={tab.sandbox.pty_pid!}
+                  onReady={() => {
+                    const ws = screenshotWsRef.current;
+                    if (ws?.readyState === WebSocket.OPEN) {
+                      ws.send(JSON.stringify({
+                        type: "terminal_ready",
+                        sandbox_id: tab.id,
+                      }));
+                    }
+                  }}
+                />
               </div>
             );
           })}

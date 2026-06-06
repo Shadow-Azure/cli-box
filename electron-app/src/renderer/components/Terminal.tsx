@@ -37,6 +37,10 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
       }
 
       // Fallback: render xterm buffer to canvas (works for hidden/offscreen tabs)
+      const fitAddon = fitAddonRef.current;
+      if (fitAddon) {
+        fitAddon.fit();
+      }
       const cols = term.cols;
       const rows = term.rows;
       const fontSize = 13;

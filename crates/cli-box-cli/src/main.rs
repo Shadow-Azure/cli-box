@@ -55,10 +55,6 @@ enum Commands {
         /// Sandbox instance ID
         #[arg(long)]
         id: String,
-
-        /// Use PTY write instead of CGEvent (more reliable for CLI processes)
-        #[arg(long)]
-        pty: bool,
     },
 
     /// Press a key in a sandbox
@@ -73,10 +69,6 @@ enum Commands {
         /// Modifier keys (e.g., cmd, shift, ctrl, alt)
         #[arg(short, long, num_args = 0..)]
         modifiers: Vec<String>,
-
-        /// Use PTY write instead of CGEvent
-        #[arg(long)]
-        pty: bool,
     },
 
     /// Click at coordinates in a sandbox
@@ -234,16 +226,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Close { id } => {
             cmd_close_daemon(&id).await?;
         }
-        Commands::TypeText { text, id, pty } => {
-            cmd_type_daemon(&text, &id, pty).await?;
+        Commands::TypeText { text, id } => {
+            cmd_type_daemon(&text, &id).await?;
         }
-        Commands::Key {
-            key,
-            id,
-            modifiers,
-            pty,
-        } => {
-            cmd_key_daemon(&key, &id, &modifiers, pty).await?;
+        Commands::Key { key, id, modifiers } => {
+            cmd_key_daemon(&key, &id, &modifiers).await?;
         }
         Commands::Click { x, y, id, button } => {
             cmd_click_daemon(x, y, &id, &button).await?;
@@ -497,10 +484,11 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
         false
     };
 
-    // Wait for renderer WebSocket to connect if Electron was newly spawned.
+    use std::io::Write;
+
+    // Phase 1: Wait for renderer WebSocket (only if Electron was newly spawned)
     if electron_newly_spawned {
-        print!("正在启动");
-        use std::io::Write;
+        print!("Waiting for renderer");
         let _ = std::io::stdout().flush();
 
         let timeout = std::time::Duration::from_secs(60);
@@ -520,7 +508,7 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
 
             match client::daemon_readiness().await {
                 Ok(resp) if resp.renderer_connected => {
-                    println!(" 完成");
+                    println!(" done");
                     break;
                 }
                 Err(e) => {
@@ -530,11 +518,55 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
             }
 
             dot_count = (dot_count % 3) + 1;
-            print!("\r正在启动{:<3}", ".".repeat(dot_count as usize));
+            print!(
+                "\rWaiting for renderer{:<3}",
+                ".".repeat(dot_count as usize)
+            );
             let _ = std::io::stdout().flush();
 
             tokio::time::sleep(poll_interval).await;
         }
+    }
+
+    // Phase 2: Wait for terminal readiness (xterm.js mounted)
+    print!("Waiting for terminal");
+    let _ = std::io::stdout().flush();
+
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_millis(500);
+    let mut dot_count: u8 = 0;
+
+    loop {
+        if start.elapsed() > timeout {
+            println!();
+            tracing::warn!(
+                "[start] Terminal not ready within {}s for sandbox {}, continuing anyway",
+                timeout.as_secs(),
+                result.sandbox_id
+            );
+            break;
+        }
+
+        match client::daemon_readiness_for_sandbox(&result.sandbox_id).await {
+            Ok(resp) if resp.terminal_ready => {
+                println!(" done");
+                break;
+            }
+            Err(e) => {
+                tracing::trace!("[start] terminal readyz check failed (will retry): {e}");
+            }
+            _ => {}
+        }
+
+        dot_count = (dot_count % 3) + 1;
+        print!(
+            "\rWaiting for terminal{:<3}",
+            ".".repeat(dot_count as usize)
+        );
+        let _ = std::io::stdout().flush();
+
+        tokio::time::sleep(poll_interval).await;
     }
 
     Ok(())
@@ -606,15 +638,29 @@ async fn cmd_close_daemon(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Query the daemon to determine a sandbox's InstanceKind.
+async fn resolve_sandbox_kind(id: &str) -> anyhow::Result<cli_box_core::instance::InstanceKind> {
+    let sandboxes = client::daemon_list_sandboxes().await?;
+    sandboxes
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.kind.clone())
+        .ok_or_else(|| anyhow::anyhow!("Sandbox '{}' not found", id))
+}
+
 /// Type text in a sandbox via the daemon API.
-async fn cmd_type_daemon(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
+async fn cmd_type_daemon(text: &str, id: &str) -> anyhow::Result<()> {
+    let use_pty = matches!(
+        resolve_sandbox_kind(id).await?,
+        cli_box_core::instance::InstanceKind::Cli { .. }
+    );
     tracing::info!(
-        "[cli] type: text_len={}, id={}, pty={}",
+        "[cli] type: text_len={}, id={}, use_pty={}",
         text.len(),
         id,
-        pty
+        use_pty
     );
-    if pty {
+    if use_pty {
         client::daemon_pty_write(id, text).await?;
         println!("Typed (PTY): {:?} -> sandbox {}", text, id);
     } else {
@@ -625,27 +671,27 @@ async fn cmd_type_daemon(text: &str, id: &str, pty: bool) -> anyhow::Result<()> 
 }
 
 /// Press a key in a sandbox via the daemon API.
-async fn cmd_key_daemon(
-    key: &str,
-    id: &str,
-    modifiers: &[String],
-    pty: bool,
-) -> anyhow::Result<()> {
+async fn cmd_key_daemon(key: &str, id: &str, modifiers: &[String]) -> anyhow::Result<()> {
+    let use_pty = matches!(
+        resolve_sandbox_kind(id).await?,
+        cli_box_core::instance::InstanceKind::Cli { .. }
+    );
     tracing::info!(
-        "[cli] key: key={}, modifiers={:?}, id={}, pty={}",
+        "[cli] key: key={}, modifiers={:?}, id={}, use_pty={}",
         key,
         modifiers,
         id,
-        pty
+        use_pty
     );
-    if pty {
+    if use_pty {
         let data = client::key_to_pty_bytes_with_modifiers(key, modifiers);
         if data.is_empty() {
             let plain = client::key_to_pty_bytes(key);
             if plain.is_empty() {
                 anyhow::bail!(
-                    "Key '{}' with modifiers {:?} cannot be mapped to PTY bytes. Use CGEvent mode (remove --pty).",
-                    key, modifiers
+                    "Key '{}' with modifiers {:?} cannot be mapped to PTY bytes.",
+                    key,
+                    modifiers
                 );
             }
             client::daemon_pty_write(id, &plain).await?;
@@ -891,20 +937,23 @@ async fn cmd_close(id: &str) -> anyhow::Result<()> {
 
 /// Type text into a sandbox (legacy).
 #[allow(dead_code)]
-async fn cmd_type(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
+async fn cmd_type(text: &str, id: &str) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
+    let use_pty = matches!(
+        resolve_sandbox_kind(id).await?,
+        cli_box_core::instance::InstanceKind::Cli { .. }
+    );
     tracing::info!(
-        "[cli] type: text_len={}, id={}, pty={}",
+        "[cli] type: text_len={}, id={}, use_pty={}",
         text.len(),
         id,
-        pty
+        use_pty
     );
 
-    if pty {
+    if use_pty {
         client.pty_write_auto(text).await?;
         println!("Typed (PTY): {:?} → sandbox {}", text, id);
     } else {
-        tracing::warn!("[cli] type: using CGEvent path (not PTY). This targets the Tauri process, not the CLI child process. Consider using --pty for CLI sandboxes.");
         client.type_text(text).await?;
         println!("Typed (CGEvent): {:?} → sandbox {}", text, id);
     }
@@ -913,17 +962,21 @@ async fn cmd_type(text: &str, id: &str, pty: bool) -> anyhow::Result<()> {
 
 /// Press a key in a sandbox (legacy).
 #[allow(dead_code)]
-async fn cmd_key(key: &str, id: &str, modifiers: &[String], pty: bool) -> anyhow::Result<()> {
+async fn cmd_key(key: &str, id: &str, modifiers: &[String]) -> anyhow::Result<()> {
     let client = client::SandboxClient::from_instance_id(id)?;
+    let use_pty = matches!(
+        resolve_sandbox_kind(id).await?,
+        cli_box_core::instance::InstanceKind::Cli { .. }
+    );
     tracing::info!(
-        "[cli] key: key={}, modifiers={:?}, id={}, pty={}",
+        "[cli] key: key={}, modifiers={:?}, id={}, use_pty={}",
         key,
         modifiers,
         id,
-        pty
+        use_pty
     );
 
-    if pty {
+    if use_pty {
         let data = client::key_to_pty_bytes_with_modifiers(key, modifiers);
         if data.is_empty() {
             // Try plain key mapping as fallback
@@ -1388,7 +1441,15 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
             "type_text" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
                 let text = args["text"].as_str().unwrap_or("");
-                client::daemon_pty_write(id, text).await?;
+                let use_pty = matches!(
+                    resolve_sandbox_kind(id).await?,
+                    cli_box_core::instance::InstanceKind::Cli { .. }
+                );
+                if use_pty {
+                    client::daemon_pty_write(id, text).await?;
+                } else {
+                    client::daemon_type(id, text).await?;
+                }
                 Ok(serde_json::json!({ "typed": text }))
             }
             "press_key" => {
@@ -1402,7 +1463,21 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
                             .collect()
                     })
                     .unwrap_or_default();
-                client::daemon_key(id, key, &mods).await?;
+                let use_pty = matches!(
+                    resolve_sandbox_kind(id).await?,
+                    cli_box_core::instance::InstanceKind::Cli { .. }
+                );
+                if use_pty {
+                    let data = client::key_to_pty_bytes_with_modifiers(key, &mods);
+                    if data.is_empty() {
+                        let plain = client::key_to_pty_bytes(key);
+                        client::daemon_pty_write(id, &plain).await?;
+                    } else {
+                        client::daemon_pty_write(id, &data).await?;
+                    }
+                } else {
+                    client::daemon_key(id, key, &mods).await?;
+                }
                 Ok(serde_json::json!({ "pressed": key }))
             }
             "inspect_ui" => {
