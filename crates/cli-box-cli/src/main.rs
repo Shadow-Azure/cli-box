@@ -70,10 +70,6 @@ enum Commands {
         /// Modifier keys (e.g., cmd, shift, ctrl, alt)
         #[arg(short, long, num_args = 0..)]
         modifiers: Vec<String>,
-
-        /// Use PTY write instead of CGEvent
-        #[arg(long)]
-        pty: bool,
     },
 
     /// Click at coordinates in a sandbox
@@ -238,9 +234,8 @@ async fn main() -> anyhow::Result<()> {
             key,
             id,
             modifiers,
-            pty,
         } => {
-            cmd_key_daemon(&key, &id, &modifiers, pty).await?;
+            cmd_key_daemon(&key, &id, &modifiers).await?;
         }
         Commands::Click { x, y, id, button } => {
             cmd_click_daemon(x, y, &id, &button).await?;
@@ -637,22 +632,22 @@ async fn cmd_key_daemon(
     key: &str,
     id: &str,
     modifiers: &[String],
-    pty: bool,
 ) -> anyhow::Result<()> {
+    let use_pty = matches!(resolve_sandbox_kind(id).await?, cli_box_core::instance::InstanceKind::Cli { .. });
     tracing::info!(
-        "[cli] key: key={}, modifiers={:?}, id={}, pty={}",
+        "[cli] key: key={}, modifiers={:?}, id={}, use_pty={}",
         key,
         modifiers,
         id,
-        pty
+        use_pty
     );
-    if pty {
+    if use_pty {
         let data = client::key_to_pty_bytes_with_modifiers(key, modifiers);
         if data.is_empty() {
             let plain = client::key_to_pty_bytes(key);
             if plain.is_empty() {
                 anyhow::bail!(
-                    "Key '{}' with modifiers {:?} cannot be mapped to PTY bytes. Use CGEvent mode (remove --pty).",
+                    "Key '{}' with modifiers {:?} cannot be mapped to PTY bytes.",
                     key, modifiers
                 );
             }
