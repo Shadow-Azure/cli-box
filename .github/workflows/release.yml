@@ -116,6 +116,8 @@ jobs:
           if [ -n "$APP_BUNDLE" ]; then
             cp -R "$APP_BUNDLE" "release/CLI Box.app"
             cd release && zip -r "CLI Box.app.zip" "CLI Box.app" && cd ..
+            # Also create tarball for backward compatibility
+            cd release && tar czf "CLI-Box-app-macos-arm64.tar.gz" "CLI Box.app" && cd ..
           fi
 
           # DMG
@@ -157,11 +159,6 @@ jobs:
           if [ -d "release/CLI Box.app" ]; then
             cp -R "release/CLI Box.app" packages/cli-box-electron-darwin-arm64/app/
           fi
-
-          # Create Electron standalone tarball
-          cd packages/cli-box-electron-darwin-arm64/app && \
-            tar czf ../../../release/CLI-Box-app-macos-arm64.tar.gz "CLI Box.app" && \
-            cd ../../..
 
       - name: Publish npm packages
         if: github.event_name == 'release'
