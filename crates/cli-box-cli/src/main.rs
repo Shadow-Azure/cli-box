@@ -1740,6 +1740,65 @@ fn find_running_electron() -> bool {
     false
 }
 
+/// Kill a stale Electron process that is alive but not responding.
+///
+/// Reads `~/.cli-box/electron.json` to get the PID, kills the process,
+/// and cleans up the file. Returns `true` if a stale process was found and killed.
+fn kill_stale_electron() -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home)
+        .join(".cli-box")
+        .join("electron.json");
+
+    if !path.exists() {
+        return false;
+    }
+
+    let json = match std::fs::read_to_string(&path) {
+        Ok(j) => j,
+        Err(_) => {
+            let _ = std::fs::remove_file(&path);
+            return false;
+        }
+    };
+
+    let info: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = std::fs::remove_file(&path);
+            return false;
+        }
+    };
+
+    let pid = match info["pid"].as_u64() {
+        Some(p) => p as i32,
+        None => {
+            let _ = std::fs::remove_file(&path);
+            return false;
+        }
+    };
+
+    // Check if process is alive
+    let alive = std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if alive {
+        tracing::info!("[start] Killing stale Electron process (pid={pid})");
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+        // Give it a moment to exit
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    let _ = std::fs::remove_file(&path);
+    alive
+}
+
 fn discover_sandbox_window() -> anyhow::Result<u32> {
     let windows = ScreenCapture::list_windows()
         .context("Failed to list windows. Is Screen Recording permission granted?")?;
@@ -1858,5 +1917,52 @@ mod tests {
 
         assert!(nested.exists(), "File should exist at nested path");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn kill_stale_electron_returns_false_when_no_file() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let path = std::path::PathBuf::from(&home)
+            .join(".cli-box")
+            .join("electron.json");
+        let backup = std::fs::read_to_string(&path).ok();
+        let _ = std::fs::remove_file(&path);
+
+        let result = kill_stale_electron();
+        assert!(
+            !result,
+            "Should return false when electron.json doesn't exist"
+        );
+
+        if let Some(content) = backup {
+            let _ = std::fs::write(&path, content);
+        }
+    }
+
+    #[test]
+    fn kill_stale_electron_returns_false_for_dead_pid() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::path::PathBuf::from(&home).join(".cli-box");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("electron.json");
+        let backup = std::fs::read_to_string(&path).ok();
+
+        // Write a PID that is very unlikely to exist
+        let _ = std::fs::write(
+            &path,
+            serde_json::json!({"pid": 4000000, "port": 15801}).to_string(),
+        );
+
+        let result = kill_stale_electron();
+        assert!(
+            !result,
+            "Should return false when PID is not alive"
+        );
+
+        if let Some(content) = backup {
+            let _ = std::fs::write(&path, content);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
