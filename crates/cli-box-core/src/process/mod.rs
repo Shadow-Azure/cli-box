@@ -656,10 +656,38 @@ impl ProcessManager {
         Ok(Some(text))
     }
 
+    /// Read PTY output without clearing the store (for ui-inspect).
+    pub fn peek_output(pid: u32) -> Result<Option<String>> {
+        let store = {
+            let sessions = SESSIONS
+                .lock()
+                .map_err(|e| AppError::Process(e.to_string()))?;
+            let session = sessions
+                .get(&pid)
+                .ok_or_else(|| AppError::Process(format!("Process {pid} not found")))?;
+            Arc::clone(&session.store)
+        };
+
+        let chunks = store.read_all()?;
+        if chunks.is_empty() {
+            return Ok(None);
+        }
+
+        let text: String = chunks.into_iter().map(|c| c.data).collect();
+        Ok(Some(text))
+    }
+
     #[cfg(not(target_os = "macos"))]
     pub fn read_output(_pid: u32) -> Result<Option<String>> {
         Err(AppError::Process(
             "read_output only supported on macOS".into(),
+        ))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn peek_output(_pid: u32) -> Result<Option<String>> {
+        Err(AppError::Process(
+            "peek_output only supported on macOS".into(),
         ))
     }
 

@@ -1177,7 +1177,7 @@ async fn ui_inspect_by_id_handler(
             // CLI sandbox: return PTY output as markdown
             let pty_pid = pty_pid
                 .ok_or_else(|| AppError::BadRequest("CLI sandbox has no PTY process".into()))?;
-            let text = ProcessManager::read_output(pty_pid)
+            let text = ProcessManager::peek_output(pty_pid)
                 .map_err(|e| AppError::Process(format!("Failed to read PTY output: {e}")))?
                 .unwrap_or_default();
             // Strip ANSI escape sequences and TUI artifacts for clean text output
