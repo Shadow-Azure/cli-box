@@ -6,7 +6,7 @@
 declare global {
   interface Window {
     sandbox: {
-      getDaemonPort: () => Promise<number>;
+      getDaemonPort: () => Promise<number | null>;
       ensureDaemon: () => Promise<number>;
       createTab: (sandboxId: string, kind: string, title: string) => Promise<void>;
       switchTab: (sandboxId: string) => Promise<void>;

@@ -17,7 +17,7 @@ import "./styles.css";
 declare global {
   interface Window {
     sandbox: {
-      getDaemonPort: () => Promise<number>;
+      getDaemonPort: () => Promise<number | null>;
       ensureDaemon: () => Promise<number>;
       createTab: (sandboxId: string, kind: string, title: string) => Promise<void>;
       switchTab: (sandboxId: string) => Promise<void>;
@@ -134,7 +134,8 @@ function App() {
         setActiveTabId(list[0].id);
       }
     } catch {
-      setConnected(false);
+      // Transient fetch failure — don't flip connected (screenshot WS will detect death)
+      console.warn("[sandbox-list] fetch failed, will retry");
     }
   }, [activeTabId]);
 
@@ -250,6 +251,20 @@ function App() {
         console.log("[screenshot-ws] disconnected");
         if ((ws as any)._readyInterval) clearInterval((ws as any)._readyInterval);
         if (!unmounted) {
+          // Check if daemon is still alive; if not, signal disconnect to re-arm main polling
+          window.sandbox
+            .getDaemonPort()
+            .then((p) => {
+              if (p === 0 || p === null) {
+                console.log("[screenshot-ws] daemon is down, signaling disconnect");
+                setConnected(false);
+                setDaemonPort(0);
+              }
+            })
+            .catch(() => {
+              setConnected(false);
+              setDaemonPort(0);
+            });
           console.log(`[screenshot-ws] reconnecting in ${reconnectDelay}ms...`);
           reconnectTimeout = setTimeout(async () => {
             // Check if daemon port changed (e.g., daemon restarted)

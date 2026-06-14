@@ -48,13 +48,25 @@ if (!gotTheLock) {
 ipcMain.handle("get-daemon-port", () => daemonPort);
 
 // IPC: renderer asks main to spawn daemon (on-demand, triggered by GUI)
+let ensureInProgress: Promise<number> | null = null;
+let daemonStartedByElectron = false;
 ipcMain.handle("ensure-daemon", async () => {
   if (daemonPort) return daemonPort; // Daemon already known (running)
+  // Coalesce concurrent calls — return the in-flight spawn promise
+  if (ensureInProgress) return ensureInProgress;
+  ensureInProgress = (async () => {
+    try {
+      const port = await ensureDaemonOnDemand();
+      daemonPort = port;
+      daemonStartedByElectron = true;
+      writeElectronJson(port);
+      return port;
+    } finally {
+      ensureInProgress = null;
+    }
+  })();
   try {
-    const port = await ensureDaemonOnDemand();
-    daemonPort = port;
-    writeElectronJson(port);
-    return port;
+    return await ensureInProgress;
   } catch (err: any) {
     const message = err?.message ?? String(err);
     console.error("[ensure-daemon] failed:", message);
@@ -157,14 +169,15 @@ function createWindow() {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    killDaemon();
+    if (daemonStartedByElectron) killDaemon();
     app.quit();
   }
 });
 
 app.on("before-quit", () => {
   removeElectronJson();
-  killDaemon();
+  // Only kill the daemon if we started it. If the CLI started it, leave it alone.
+  if (daemonStartedByElectron) killDaemon();
 });
 
 app.on("activate", () => {
