@@ -58,13 +58,43 @@ function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  // Initialize daemon port and load sandboxes
+  // Poll for daemon port every 1s until daemon is available
   useEffect(() => {
-    window.sandbox.getDaemonPort().then((port) => {
-      setDaemonPort(port);
-      setConnected(true);
-      refreshSandboxes();
-    });
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function poll() {
+      if (cancelled) return;
+      window.sandbox
+        .getDaemonPort()
+        .then((port) => {
+          if (cancelled) return;
+          if (port && port > 0) {
+            // Daemon is up
+            if (port !== getDaemonPort()) {
+              setDaemonPort(port);
+              setConnected(true);
+              refreshSandboxes();
+            }
+            // Connected — no need to poll
+          } else {
+            // Daemon not running yet
+            setConnected(false);
+            pollTimer = setTimeout(poll, 1000);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setConnected(false);
+          pollTimer = setTimeout(poll, 1000);
+        });
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, []);
 
   // Listen for tab switch commands from main process
