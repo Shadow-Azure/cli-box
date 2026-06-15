@@ -470,7 +470,7 @@ async fn create_sandbox_handler(
 
             Ok(Json(CreateSandboxResponse {
                 sandbox_id: id,
-                pty_pid: Some(process_info.pid),
+                pty_pid: None, // APP sandboxes don't have PTY
                 window_id,
             }))
         }

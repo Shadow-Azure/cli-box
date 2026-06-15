@@ -563,44 +563,47 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     }
 
     // Phase 2: Wait for terminal readiness (xterm.js mounted)
-    print!("Waiting for terminal");
-    let _ = std::io::stdout().flush();
-
-    let timeout = std::time::Duration::from_secs(60);
-    let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_millis(500);
-    let mut dot_count: u8 = 0;
-
-    loop {
-        if start.elapsed() > timeout {
-            println!();
-            tracing::warn!(
-                "[start] Terminal not ready within {}s for sandbox {}, continuing anyway",
-                timeout.as_secs(),
-                result.sandbox_id
-            );
-            break;
-        }
-
-        match client::daemon_readiness_for_sandbox(&result.sandbox_id).await {
-            Ok(resp) if resp.terminal_ready => {
-                println!(" done");
-                break;
-            }
-            Err(e) => {
-                tracing::trace!("[start] terminal readyz check failed (will retry): {e}");
-            }
-            _ => {}
-        }
-
-        dot_count = (dot_count % 3) + 1;
-        print!(
-            "\rWaiting for terminal{:<3}",
-            ".".repeat(dot_count as usize)
-        );
+    // APP sandboxes don't have PTY/terminal, so skip this phase
+    if result.pty_pid.is_some() {
+        print!("Waiting for terminal");
         let _ = std::io::stdout().flush();
 
-        tokio::time::sleep(poll_interval).await;
+        let timeout = std::time::Duration::from_secs(60);
+        let start = std::time::Instant::now();
+        let poll_interval = std::time::Duration::from_millis(500);
+        let mut dot_count: u8 = 0;
+
+        loop {
+            if start.elapsed() > timeout {
+                println!();
+                tracing::warn!(
+                    "[start] Terminal not ready within {}s for sandbox {}, continuing anyway",
+                    timeout.as_secs(),
+                    result.sandbox_id
+                );
+                break;
+            }
+
+            match client::daemon_readiness_for_sandbox(&result.sandbox_id).await {
+                Ok(resp) if resp.terminal_ready => {
+                    println!(" done");
+                    break;
+                }
+                Err(e) => {
+                    tracing::trace!("[start] terminal readyz check failed (will retry): {e}");
+                }
+                _ => {}
+            }
+
+            dot_count = (dot_count % 3) + 1;
+            print!(
+                "\rWaiting for terminal{:<3}",
+                ".".repeat(dot_count as usize)
+            );
+            let _ = std::io::stdout().flush();
+
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     Ok(())
