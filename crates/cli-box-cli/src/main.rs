@@ -556,9 +556,12 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
         }
 
         tracing::warn!(
-            "[start] Renderer WebSocket did not connect within {}s, continuing anyway",
+            "[start] Renderer WebSocket did not connect within {}s",
             timeout.as_secs()
         );
+        eprintln!("Error: Electron renderer did not connect within {}s.", timeout.as_secs());
+        eprintln!("Hint: Screenshot functionality will not work. Check if Electron is running.");
+        eprintln!("      Try: cli-box close <id> and restart, or check system permissions.");
         break;
     }
 
@@ -577,10 +580,12 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
             if start.elapsed() > timeout {
                 println!();
                 tracing::warn!(
-                    "[start] Terminal not ready within {}s for sandbox {}, continuing anyway",
+                    "[start] Terminal not ready within {}s for sandbox {}",
                     timeout.as_secs(),
                     result.sandbox_id
                 );
+                eprintln!("Error: Terminal not ready within {}s for sandbox {}.", timeout.as_secs(), result.sandbox_id);
+                eprintln!("Hint: The sandbox may not have started correctly. Try closing and restarting.");
                 break;
             }
 
