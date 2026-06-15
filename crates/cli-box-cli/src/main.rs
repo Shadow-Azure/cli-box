@@ -410,6 +410,11 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
 
 /// Start a sandbox via the daemon: ensures daemon is running, then creates a sandbox.
 async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> {
+    // Clean up stale Electron processes before starting.
+    // Stale Electron processes can hold old WebSocket connections and prevent
+    // the new renderer from connecting to the daemon's screenshot WebSocket.
+    cleanup_stale_electron_processes();
+
     let port = match cli_box_core::daemon::find_running_daemon() {
         Some(p) => {
             println!("Sandbox daemon already running on port {p}");
@@ -1800,6 +1805,63 @@ fn find_running_electron() -> bool {
     }
     let _ = std::fs::remove_file(&path);
     false
+}
+
+/// Find and kill ALL stale CLI Box Electron processes by name.
+/// This is more aggressive than kill_stale_electron() (which only checks electron.json)
+/// and catches orphaned processes that don't have a valid electron.json.
+fn cleanup_stale_electron_processes() {
+    // Find all "CLI Box" main processes (not helpers) via pgrep
+    let output = match std::process::Command::new("pgrep")
+        .args(["-f", "CLI Box.app/Contents/MacOS/CLI Box"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let pids: Vec<i32> = stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .collect();
+
+    if pids.is_empty() {
+        return;
+    }
+
+    // Check if the daemon's renderer is connected. If not, kill stale Electron.
+    let renderer_connected = cli_box_core::daemon::find_running_daemon()
+        .and_then(|port| {
+            let url = format!("http://127.0.0.1:{port}/readyz");
+            reqwest::blocking::get(&url).ok()
+        })
+        .and_then(|resp| resp.json::<serde_json::Value>().ok())
+        .and_then(|v| v.get("renderer_connected").and_then(|r| r.as_bool()))
+        .unwrap_or(false);
+
+    if renderer_connected {
+        // Renderer is connected — don't kill anything
+        return;
+    }
+
+    // Renderer not connected — kill all stale Electron processes
+    for pid in &pids {
+        tracing::info!("[start] Killing stale CLI Box Electron process (pid={pid})");
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+    }
+
+    // Wait for processes to die
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Clean up electron.json
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let electron_json = std::path::PathBuf::from(home)
+        .join(".cli-box")
+        .join("electron.json");
+    let _ = std::fs::remove_file(&electron_json);
 }
 
 /// Kill a stale Electron process that is alive but not responding.

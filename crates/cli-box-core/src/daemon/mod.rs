@@ -1455,7 +1455,6 @@ async fn shutdown_handler() -> Json<serde_json::Value> {
 /// Writes `daemon.json`, binds the TCP listener, and serves until
 /// interrupted. Cleans up `daemon.json` on ctrl-c.
 pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    write_daemon_info(port)?;
     tracing::info!(
         "Daemon starting on port {port} (pid={})",
         std::process::id()
@@ -1526,6 +1525,11 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     tracing::info!("Daemon listening on 127.0.0.1:{port}");
+
+    // Write daemon.json AFTER binding to the port, so that Electron can connect
+    // immediately when it discovers the daemon (no race condition window).
+    write_daemon_info(port)?;
+
     axum::serve(listener, router).await?;
 
     cleanup_daemon_info()?;
