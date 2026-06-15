@@ -1252,6 +1252,14 @@ fn cmd_logs(id: Option<&str>) -> anyhow::Result<()> {
 
 async fn cmd_ui_inspect(id: &str) -> anyhow::Result<()> {
     let tree = client::daemon_ui_inspect(id).await?;
+    // For CLI/TUI sandboxes, output the markdown content directly
+    if tree.get("type").and_then(|v| v.as_str()) == Some("terminal") {
+        if let Some(md) = tree.get("markdown").and_then(|v| v.as_str()) {
+            println!("{}", md);
+            return Ok(());
+        }
+    }
+    // For App sandboxes or fallback, output full JSON
     println!("{}", serde_json::to_string_pretty(&tree)?);
     Ok(())
 }
