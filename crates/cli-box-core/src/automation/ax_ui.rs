@@ -48,6 +48,33 @@ mod macos_impl {
     /// Anything below this is almost certainly a null offset or dangling pointer.
     const MIN_VALID_PTR: usize = 0x1000;
 
+    type AXObserverRef = *const c_void;
+    type CFRunLoopSourceRef = *const c_void;
+    type CFRunLoopRef = *const c_void;
+    type CFRunLoopMode = CFStringRef;
+
+    // Callback type for AXObserver
+    type AXObserverCallback = extern "C" fn(
+        observer: AXObserverRef,
+        element: AXUIElementRef,
+        notification: CFStringRef,
+        user_data: *mut c_void,
+    ) -> AXError;
+
+    extern "C" {
+        fn AXObserverCreate(
+            pid: i32,
+            callback: AXObserverCallback,
+            out_observer: *mut AXObserverRef,
+        ) -> AXError;
+        fn AXObserverAddNotification(
+            observer: AXObserverRef,
+            element: AXUIElementRef,
+            notification: CFStringRef,
+        ) -> AXError;
+        fn AXObserverGetRunLoopSource(observer: AXObserverRef) -> CFRunLoopSourceRef;
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
@@ -55,6 +82,11 @@ mod macos_impl {
             element: AXUIElementRef,
             attribute: CFStringRef,
         ) -> CFTypeRef;
+        fn AXUIElementSetAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: CFTypeRef,
+        ) -> AXError;
         fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> AXError;
         fn AXIsProcessTrusted() -> bool;
     }
@@ -71,7 +103,17 @@ mod macos_impl {
             key: *const c_void,
             value: *mut *const c_void,
         ) -> bool;
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        fn CFRunLoopAddSource(
+            rl: CFRunLoopRef,
+            source: CFRunLoopSourceRef,
+            mode: CFRunLoopMode,
+        );
+        fn CFRunLoopRunInMode(mode: CFRunLoopMode, seconds: f64, returnAfterSourceHandled: bool) -> i32;
     }
+
+    // kCFRunLoopDefaultMode - well-known constant
+    // CFRunLoopAddSource with null mode uses the default mode
 
     fn ax_attr(s: &str) -> CFString {
         CFString::new(s)
@@ -391,11 +433,76 @@ mod macos_impl {
         }
     }
 
+    /// Activate Chromium accessibility tree.
+    /// Chromium apps (Chrome, Edge, VS Code, etc.) don't expose their full AX tree by default.
+    /// They need two signals to enable it:
+    /// 1. AXManualAccessibility or AXEnhancedUserInterface attributes set to true
+    /// 2. An AXObserver registered with at least one notification subscription
+    ///
+    /// Based on cua-main's approach (AXEnablementAssertion.swift + AppState.swift).
+    unsafe fn activate_chromium_accessibility(pid: i32, app: AXUIElementRef) {
+        // Create CFBoolean true value
+        let true_value = CFBoolean::true_value();
+
+        // Set AXManualAccessibility = true
+        let manual_key = CFString::new("AXManualAccessibility");
+        let _ = AXUIElementSetAttributeValue(
+            app,
+            manual_key.as_concrete_TypeRef(),
+            true_value.as_concrete_TypeRef() as CFTypeRef,
+        );
+
+        // Set AXEnhancedUserInterface = true
+        let enhanced_key = CFString::new("AXEnhancedUserInterface");
+        let _ = AXUIElementSetAttributeValue(
+            app,
+            enhanced_key.as_concrete_TypeRef(),
+            true_value.as_concrete_TypeRef() as CFTypeRef,
+        );
+
+        // Register an AXObserver with a notification to signal Chromium
+        // that an AX client is present. This is the key signal Chrome watches for.
+        let mut observer: AXObserverRef = std::ptr::null();
+        let create_result = AXObserverCreate(pid, ax_observer_callback, &mut observer);
+        if create_result == 0 && !observer.is_null() {
+            // Subscribe to a cheap notification
+            let notif = CFString::new("AXFocusedUIElementChanged");
+            let _ = AXObserverAddNotification(observer, app, notif.as_concrete_TypeRef());
+
+            // Add observer to current run loop (null mode = default mode)
+            let source = AXObserverGetRunLoopSource(observer);
+            if !source.is_null() {
+                CFRunLoopAddSource(
+                    CFRunLoopGetCurrent(),
+                    source,
+                    std::ptr::null(), // kCFRunLoopDefaultMode
+                );
+            }
+        }
+
+        // Wait for Chromium to build its AX tree
+        // 500ms is the difference between ~25 elements and 500+ elements
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    /// No-op callback for AXObserver
+    extern "C" fn ax_observer_callback(
+        _observer: AXObserverRef,
+        _element: AXUIElementRef,
+        _notification: CFStringRef,
+        _user_data: *mut c_void,
+    ) -> AXError {
+        0 // kAXErrorSuccess
+    }
+
     impl UiInspector {
         pub fn inspect_window(window_id: u32) -> Result<UiElement> {
             check_accessibility_permission()?;
 
             // Chromium windows (Chrome, Edge, etc.) cause segfaults when inspected via AX API
+            // even with AXManualAccessibility/AXEnhancedUserInterface activation.
+            // This is a known limitation - Chromium's multi-process AX architecture
+            // has race conditions that cause crashes in HIToolbox/ApplicationServices.
             if is_chromium_window(window_id) {
                 return Err(AppError::Accessibility(
                     "AX inspection not supported for Chromium-based browsers (Chrome, Edge, etc.)".to_string(),
