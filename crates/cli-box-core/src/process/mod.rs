@@ -177,6 +177,7 @@ impl ProcessManager {
                 .arg(app_path)
                 .arg("--args")
                 .arg(format!("--user-data-dir={user_data_dir}"))
+                .arg("--force-renderer-accessibility")
                 .arg("--no-first-run")
                 .arg("--disable-default-apps")
                 .arg("--disable-extensions")
