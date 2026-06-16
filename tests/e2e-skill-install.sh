@@ -1,429 +1,130 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================
 # E2E Skill Installation Test
-# ============================================================
-# Verifies that cli-box skill installation works correctly
-# in an isolated tmp directory. Tests both npm postinstall
-# and install.sh (GitHub Release) paths.
-#
-# Usage: bash tests/e2e-skill-install.sh
-# ============================================================
+# Verifies (1) postinstall symlinks binaries but does NOT copy the skill,
+# and (2) install.sh installs the skill into the specified target only.
+# (The cli-box-skill CLI is covered by node:test in packages/cli-box-skill/test/.)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 info()  { echo -e "${GREEN}➜${NC} $*"; }
 warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 err()   { echo -e "${RED}✗${NC} $*"; }
 ok()    { echo -e "${GREEN}✓${NC} $*"; }
-
 FAILED=0
 
-# ==================== Skip on Linux CI (macOS frameworks required) ====================
 if [ "$(uname)" = "Linux" ] && [ -n "${CI:-}" ]; then
   warn "Skipping E2E skill installation tests on Linux CI (macOS frameworks required)"
   exit 0
 fi
 
-# ==================== Setup: ensure platform package has binaries ====================
 ensure_platform_binaries() {
   local PKG_BIN="$REPO_ROOT/packages/cli-box-darwin-arm64/bin"
-  if [ -f "$PKG_BIN/cli-box" ] && [ -f "$PKG_BIN/cli-box-daemon" ]; then
-    return
-  fi
-
+  if [ -f "$PKG_BIN/cli-box" ] && [ -f "$PKG_BIN/cli-box-daemon" ]; then return; fi
   info "Populating platform package bin/ with built binaries..."
   mkdir -p "$PKG_BIN"
-
-  # Build binaries if not found
   if [ ! -f "$REPO_ROOT/target/release/cli-box" ] && [ ! -f "$REPO_ROOT/target/debug/cli-box" ]; then
-    info "  No built binaries found. Building with cargo..."
-    if ! cargo build -p cli-box-cli -p cli-box-daemon 2>&1; then
-      err "  cargo build failed"
-      exit 1
-    fi
+    info "  Building with cargo..."; cargo build -p cli-box-cli -p cli-box-daemon >/dev/null 2>&1 || { err "cargo build failed"; exit 1; }
   fi
-
   if [ -f "$REPO_ROOT/target/release/cli-box" ]; then
     ln -sf "$REPO_ROOT/target/release/cli-box" "$PKG_BIN/cli-box"
     ln -sf "$REPO_ROOT/target/release/cli-box-daemon" "$PKG_BIN/cli-box-daemon"
-  elif [ -f "$REPO_ROOT/target/debug/cli-box" ]; then
+  else
     ln -sf "$REPO_ROOT/target/debug/cli-box" "$PKG_BIN/cli-box"
     ln -sf "$REPO_ROOT/target/debug/cli-box-daemon" "$PKG_BIN/cli-box-daemon"
-  else
-    err "No built binaries found even after cargo build."
-    exit 1
   fi
-
   ok "Platform package binaries linked"
 }
 
-# ==================== Test 1: npm postinstall.mjs ====================
 test_postinstall() {
-  info "Test 1: npm postinstall.mjs"
-
-  local TMP_HOME
-  TMP_HOME=$(mktemp -d)
-
-  # postinstall.mjs uses createRequire(import.meta.url) which resolves from
-  # its own directory. We need the platform package in its node_modules/.
+  info "Test 1: postinstall (binaries only, no skill copy)"
+  local TMP_HOME; TMP_HOME=$(mktemp -d)
   local SKILL_PKG_NM="$REPO_ROOT/packages/cli-box-skill/node_modules"
   local CREATED_NM=0
   cleanup_postinstall() {
     rm -rf "$TMP_HOME"
-    if [ "$CREATED_NM" -eq 1 ]; then
-      rm -rf "$SKILL_PKG_NM"
-    fi
+    if [ "$CREATED_NM" -eq 1 ]; then rm -rf "$SKILL_PKG_NM"; fi
   }
   trap cleanup_postinstall RETURN
-
-  # Create node_modules with platform package symlink next to postinstall.mjs
   if [ ! -d "$SKILL_PKG_NM/cli-box-darwin-arm64" ]; then
     mkdir -p "$SKILL_PKG_NM"
-    ln -s "$REPO_ROOT/packages/cli-box-darwin-arm64" \
-          "$SKILL_PKG_NM/cli-box-darwin-arm64"
+    ln -s "$REPO_ROOT/packages/cli-box-darwin-arm64" "$SKILL_PKG_NM/cli-box-darwin-arm64"
     CREATED_NM=1
   fi
-
-  # Create .claude/skills/ dir (simulating Claude Code installed)
-  mkdir -p "$TMP_HOME/.claude/skills"
-  # Create .config/opencode/skills/ dir (simulating OpenCode installed)
-  mkdir -p "$TMP_HOME/.config/opencode/skills"
-
-  # Run postinstall.mjs with HOME override
-  info "  Running postinstall.mjs..."
   if ! HOME="$TMP_HOME" node "$REPO_ROOT/packages/cli-box-skill/postinstall.mjs" 2>&1; then
-    err "  postinstall.mjs exited with non-zero status"
-    FAILED=1
-    return
+    err "  postinstall.mjs exited non-zero"; FAILED=1; return
   fi
-
-  # Verify symlinks
-  if [ -L "$TMP_HOME/.cli-box/bin/cli-box" ]; then
-    ok "  cli-box symlink created"
+  [ -L "$TMP_HOME/.cli-box/bin/cli-box" ] && ok "  cli-box symlink created" || { err "  cli-box symlink NOT created"; FAILED=1; }
+  [ -L "$TMP_HOME/.cli-box/bin/cli-box-daemon" ] && ok "  cli-box-daemon symlink created" || { err "  cli-box-daemon symlink NOT created"; FAILED=1; }
+  if [ -e "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ]; then
+    err "  postinstall copied SKILL.md to .claude (should not)"; FAILED=1
   else
-    err "  cli-box symlink NOT created"
-    FAILED=1
+    ok "  postinstall did not copy SKILL.md (correct)"
   fi
-
-  if [ -L "$TMP_HOME/.cli-box/bin/cli-box-daemon" ]; then
-    ok "  cli-box-daemon symlink created"
-  else
-    err "  cli-box-daemon symlink NOT created"
-    FAILED=1
-  fi
-
-  # Verify symlink targets are executable
-  if [ -x "$TMP_HOME/.cli-box/bin/cli-box" ]; then
-    ok "  cli-box symlink target is executable"
-  else
-    err "  cli-box symlink target is NOT executable"
-    FAILED=1
-  fi
-
-  # Verify SKILL.md installed to Claude directory
-  if [ -f "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ]; then
-    ok "  SKILL.md installed to .claude/skills/cli-box/"
-  else
-    err "  SKILL.md NOT found in .claude/skills/cli-box/"
-    FAILED=1
-  fi
-
-  # Verify SKILL.md installed to OpenCode directory
-  if [ -f "$TMP_HOME/.config/opencode/skills/cli-box/SKILL.md" ]; then
-    ok "  SKILL.md installed to .config/opencode/skills/cli-box/"
-  else
-    err "  SKILL.md NOT found in .config/opencode/skills/cli-box/"
-    FAILED=1
-  fi
-
-  # Verify SKILL.md frontmatter
-  if head -1 "$TMP_HOME/.claude/skills/cli-box/SKILL.md" | grep -q "^---$"; then
-    ok "  SKILL.md has valid frontmatter delimiter"
-  else
-    err "  SKILL.md missing frontmatter delimiter"
-    FAILED=1
-  fi
-
-  if head -5 "$TMP_HOME/.claude/skills/cli-box/SKILL.md" | grep -q "^name: cli-box"; then
-    ok "  SKILL.md frontmatter contains 'name: cli-box'"
-  else
-    err "  SKILL.md frontmatter missing 'name: cli-box'"
-    FAILED=1
-  fi
-
-  if head -5 "$TMP_HOME/.claude/skills/cli-box/SKILL.md" | grep -q "^description:"; then
-    ok "  SKILL.md frontmatter contains 'description'"
-  else
-    err "  SKILL.md frontmatter missing 'description'"
-    FAILED=1
-  fi
-
   info "  Test 1 complete"
 }
 
-# ==================== Test 2: install.sh (GitHub Release path) ====================
-test_install_sh() {
-  info "Test 2: install.sh (GitHub Release path)"
-
-  local TMP_HOME
-  TMP_HOME=$(mktemp -d)
-  local TMP_DIR
-  TMP_DIR=$(mktemp -d)
-  trap 'rm -rf "$TMP_HOME" "$TMP_DIR"' RETURN
-
-  # Build local tarball from current repo state
-  info "  Building local tarball..."
-  local SKILL_PKG_DIR="$TMP_DIR/skill-pkg"
-  mkdir -p "$SKILL_PKG_DIR/bin"
-
-  cp "$REPO_ROOT/packages/cli-box-skill/skill/SKILL.md" "$SKILL_PKG_DIR/"
-
-  # Build binaries if not found
+build_local_tarball() {
+  local out="$1"
+  local d; d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cp "$REPO_ROOT/packages/cli-box-skill/skill/SKILL.md" "$d/"
   if [ ! -f "$REPO_ROOT/target/release/cli-box" ] && [ ! -f "$REPO_ROOT/target/debug/cli-box" ]; then
-    info "  Building binaries with cargo..."
     cargo build -p cli-box-cli -p cli-box-daemon >/dev/null 2>&1
   fi
-
-  # Use release binaries if available, fallback to debug
   if [ -f "$REPO_ROOT/target/release/cli-box" ]; then
-    cp "$REPO_ROOT/target/release/cli-box" "$SKILL_PKG_DIR/bin/"
-    cp "$REPO_ROOT/target/release/cli-box-daemon" "$SKILL_PKG_DIR/bin/"
-  elif [ -f "$REPO_ROOT/target/debug/cli-box" ]; then
-    cp "$REPO_ROOT/target/debug/cli-box" "$SKILL_PKG_DIR/bin/"
-    cp "$REPO_ROOT/target/debug/cli-box-daemon" "$SKILL_PKG_DIR/bin/"
+    cp "$REPO_ROOT/target/release/cli-box" "$d/bin/"; cp "$REPO_ROOT/target/release/cli-box-daemon" "$d/bin/"
   else
-    err "  No built binaries found even after cargo build."
-    FAILED=1
-    return
+    cp "$REPO_ROOT/target/debug/cli-box" "$d/bin/"; cp "$REPO_ROOT/target/debug/cli-box-daemon" "$d/bin/"
   fi
+  chmod +x "$d/bin/"*
+  (cd "$d" && tar czf "$out" .)
+  rm -rf "$d"
+}
 
-  chmod +x "$SKILL_PKG_DIR/bin/"*
-  (cd "$SKILL_PKG_DIR" && tar czf "$TMP_DIR/cli-box-skill.tar.gz" .)
-  ok "  Local tarball built"
-
-  # Create modified install.sh pointing to local tarball
-  cp "$REPO_ROOT/packages/cli-box-skill/skill/install.sh" "$TMP_DIR/install-local.sh"
-
-  # Replace version detection with fixed version
-  sed -i '' 's/VERSION="${CLI_BOX_VERSION:-latest}"/VERSION="local"/' "$TMP_DIR/install-local.sh"
-
-  # Replace the GitHub API version fetch block with a no-op
+patch_install_sh() {
+  local src="$1" dst="$2" tarball="$3"
+  cp "$src" "$dst"
+  sed -i '' 's/VERSION="${CLI_BOX_VERSION:-latest}"/VERSION="local"/' "$dst"
   sed -i '' '/Fetching latest release version/,/fi/c\
-  info "Using local version"' "$TMP_DIR/install-local.sh"
+info "Using local version"' "$dst"
+  sed -i '' "s|DOWNLOAD_URL=\"https://github.com/\$REPO/releases/download/\$VERSION/cli-box-skill.tar.gz\"|DOWNLOAD_URL=\"file://$tarball\"|" "$dst"
+}
 
-  # Replace download URL with local file
-  sed -i '' "s|DOWNLOAD_URL=\"https://github.com/\$REPO/releases/download/\$VERSION/cli-box-skill.tar.gz\"|DOWNLOAD_URL=\"file://$TMP_DIR/cli-box-skill.tar.gz\"|" "$TMP_DIR/install-local.sh"
-
-  # Run install.sh with HOME override
-  info "  Running install-local.sh..."
-  if ! HOME="$TMP_HOME" bash "$TMP_DIR/install-local.sh" 2>&1; then
-    err "  install.sh exited with non-zero status"
-    FAILED=1
-    return
+test_install_sh() {
+  info "Test 2: install.sh <target> (skill into chosen target only)"
+  local TMP_HOME; TMP_HOME=$(mktemp -d)
+  local TMP_DIR; TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_HOME" "$TMP_DIR"' RETURN
+  local tarball="$TMP_DIR/cli-box-skill.tar.gz"
+  build_local_tarball "$tarball" || { err "  tarball build failed"; FAILED=1; return; }
+  local script="$TMP_DIR/install-local.sh"
+  patch_install_sh "$REPO_ROOT/packages/cli-box-skill/skill/install.sh" "$script" "$tarball"
+  if ! HOME="$TMP_HOME" bash "$script" claude >/dev/null 2>&1; then
+    err "  install.sh claude exited non-zero"; FAILED=1; return
   fi
+  [ -f "$TMP_HOME/.cli-box/bin/cli-box" ] && ok "  binaries installed" || { err "  binaries missing"; FAILED=1; }
+  [ -f "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ] && ok "  SKILL.md in Claude dir" || { err "  SKILL.md missing in Claude dir"; FAILED=1; }
+  [ ! -e "$TMP_HOME/.config/opencode/skills/cli-box" ] && ok "  OpenCode dir untouched" || { err "  OpenCode dir should be untouched"; FAILED=1; }
 
-  # Verify binaries
-  if [ -f "$TMP_HOME/.cli-box/bin/cli-box" ] && [ -x "$TMP_HOME/.cli-box/bin/cli-box" ]; then
-    ok "  cli-box binary installed and executable"
-  else
-    err "  cli-box binary NOT found or not executable"
-    FAILED=1
-  fi
-
-  if [ -f "$TMP_HOME/.cli-box/bin/cli-box-daemon" ] && [ -x "$TMP_HOME/.cli-box/bin/cli-box-daemon" ]; then
-    ok "  cli-box-daemon binary installed and executable"
-  else
-    err "  cli-box-daemon binary NOT found or not executable"
-    FAILED=1
-  fi
-
-  # Verify SKILL.md
-  if [ -f "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ]; then
-    ok "  SKILL.md installed to .claude/skills/cli-box/"
-  else
-    # install.sh only installs SKILL.md if .claude/ dir exists
-    warn "  SKILL.md not installed (.claude/ dir may not exist in tmp HOME)"
-  fi
-
-  # Verify SKILL.md frontmatter
-  if [ -f "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ]; then
-    if head -5 "$TMP_HOME/.claude/skills/cli-box/SKILL.md" | grep -q "^name: cli-box"; then
-      ok "  SKILL.md has valid frontmatter"
-    else
-      err "  SKILL.md frontmatter invalid"
-      FAILED=1
-    fi
-  fi
-
+  info "  Test 2b: install.sh with no target exits 1"
+  local rc=0
+  HOME="$TMP_HOME" bash "$script" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 1 ]; then err "  expected exit 1, got $rc"; FAILED=1; else ok "  no-target exit 1"; fi
   info "  Test 2 complete"
 }
 
-# ==================== Test 3: Post-install verification ====================
-test_post_install_verify() {
-  info "Test 3: Post-install verification"
-
-  local TMP_HOME
-  TMP_HOME=$(mktemp -d)
-  local TMP_DIR
-  TMP_DIR=$(mktemp -d)
-  trap 'rm -rf "$TMP_HOME" "$TMP_DIR"' RETURN
-
-  # Build local tarball (same as Test 2)
-  local SKILL_PKG_DIR="$TMP_DIR/skill-pkg"
-  mkdir -p "$SKILL_PKG_DIR/bin"
-  cp "$REPO_ROOT/packages/cli-box-skill/skill/SKILL.md" "$SKILL_PKG_DIR/"
-
-  # Build binaries if not found
-  if [ ! -f "$REPO_ROOT/target/release/cli-box" ] && [ ! -f "$REPO_ROOT/target/debug/cli-box" ]; then
-    info "  Building binaries with cargo..."
-    cargo build -p cli-box-cli -p cli-box-daemon >/dev/null 2>&1
-  fi
-
-  if [ -f "$REPO_ROOT/target/release/cli-box" ]; then
-    cp "$REPO_ROOT/target/release/cli-box" "$SKILL_PKG_DIR/bin/"
-    cp "$REPO_ROOT/target/release/cli-box-daemon" "$SKILL_PKG_DIR/bin/"
-  elif [ -f "$REPO_ROOT/target/debug/cli-box" ]; then
-    cp "$REPO_ROOT/target/debug/cli-box" "$SKILL_PKG_DIR/bin/"
-    cp "$REPO_ROOT/target/debug/cli-box-daemon" "$SKILL_PKG_DIR/bin/"
-  else
-    err "  No built binaries found even after cargo build."
-    FAILED=1
-    return
-  fi
-  chmod +x "$SKILL_PKG_DIR/bin/"*
-  (cd "$SKILL_PKG_DIR" && tar czf "$TMP_DIR/cli-box-skill.tar.gz" .)
-
-  # Install via install.sh
-  cp "$REPO_ROOT/packages/cli-box-skill/skill/install.sh" "$TMP_DIR/install-local.sh"
-  sed -i '' 's/VERSION="${CLI_BOX_VERSION:-latest}"/VERSION="local"/' "$TMP_DIR/install-local.sh"
-  sed -i '' '/Fetching latest release version/,/fi/c\
-  info "Using local version"' "$TMP_DIR/install-local.sh"
-  sed -i '' "s|DOWNLOAD_URL=\"https://github.com/\$REPO/releases/download/\$VERSION/cli-box-skill.tar.gz\"|DOWNLOAD_URL=\"file://$TMP_DIR/cli-box-skill.tar.gz\"|" "$TMP_DIR/install-local.sh"
-
-  # Create .claude/skills/ so install.sh installs SKILL.md
-  mkdir -p "$TMP_HOME/.claude/skills"
-  HOME="$TMP_HOME" bash "$TMP_DIR/install-local.sh" >/dev/null 2>&1
-
-  # Verify cli-box binary responds to --help
-  info "  Verifying cli-box --help..."
-  if "$TMP_HOME/.cli-box/bin/cli-box" --help >/dev/null 2>&1; then
-    ok "  cli-box --help works"
-  else
-    err "  cli-box --help failed"
-    FAILED=1
-  fi
-
-  # Verify SKILL.md frontmatter is valid
-  info "  Verifying SKILL.md frontmatter..."
-  local SKILL_FILE="$TMP_HOME/.claude/skills/cli-box/SKILL.md"
-  if [ -f "$SKILL_FILE" ]; then
-    if head -1 "$SKILL_FILE" | grep -q "^---$" && \
-       head -5 "$SKILL_FILE" | grep -q "^name: cli-box" && \
-       head -5 "$SKILL_FILE" | grep -q "^description:"; then
-      ok "  SKILL.md frontmatter valid (name + description present)"
-    else
-      err "  SKILL.md frontmatter invalid"
-      FAILED=1
-    fi
-  else
-    warn "  SKILL.md not found, skipping frontmatter check"
-  fi
-
-  # Functional-level test (local only, skipped in CI)
-  if [ "$(uname)" = "Darwin" ] && [ -z "${CI:-}" ]; then
-    info "  Running functional test (cli-box start zsh)..."
-    local SANDBOX_ID
-
-    # Use timeout to prevent hanging (macOS doesn't have timeout command)
-    # Run cli-box start in background and wait with timeout
-    local OUTPUT_FILE
-    OUTPUT_FILE=$(mktemp)
-    local PID_FILE
-    PID_FILE=$(mktemp)
-
-    # Start cli-box in background
-    "$TMP_HOME/.cli-box/bin/cli-box" start zsh > "$OUTPUT_FILE" 2>&1 &
-    local CLI_PID=$!
-    echo "$CLI_PID" > "$PID_FILE"
-
-    # Wait up to 30 seconds for output
-    local TIMEOUT=30
-    local ELAPSED=0
-    while [ $ELAPSED -lt $TIMEOUT ]; do
-      if ! kill -0 "$CLI_PID" 2>/dev/null; then
-        # Process finished
-        break
-      fi
-      if [ -s "$OUTPUT_FILE" ]; then
-        # Got some output
-        break
-      fi
-      sleep 1
-      ELAPSED=$((ELAPSED + 1))
-    done
-
-    # Check if process is still running (timeout case)
-    if kill -0 "$CLI_PID" 2>/dev/null; then
-      warn "  cli-box start timed out after ${TIMEOUT}s, killing..."
-      kill "$CLI_PID" 2>/dev/null || true
-      wait "$CLI_PID" 2>/dev/null || true
-      warn "  Functional test skipped (timeout - macOS permissions may be required)"
-    else
-      # Process finished, check output
-      SANDBOX_ID=$(grep -oE '[a-f0-9]{6}' "$OUTPUT_FILE" | head -1 || true)
-      if [ -n "$SANDBOX_ID" ]; then
-        sleep 3
-        if "$TMP_HOME/.cli-box/bin/cli-box" list 2>&1 | grep -q "$SANDBOX_ID"; then
-          ok "  Sandbox $SANDBOX_ID is running"
-        else
-          warn "  Sandbox $SANDBOX_ID not found in list (may have exited)"
-        fi
-        "$TMP_HOME/.cli-box/bin/cli-box" close "$SANDBOX_ID" 2>/dev/null || true
-      else
-        warn "  Could not start sandbox (macOS permissions may be required)"
-      fi
-    fi
-
-    # Cleanup
-    rm -f "$OUTPUT_FILE" "$PID_FILE"
-  else
-    info "  Skipping functional test (CI or non-macOS)"
-  fi
-
-  info "  Test 3 complete"
-}
-
-# ==================== Main ====================
 echo ""
 echo "=============================================="
 echo " E2E Skill Installation Tests"
 echo "=============================================="
 echo ""
-
-ensure_platform_binaries
-echo ""
-
-test_postinstall
-echo ""
-test_install_sh
-echo ""
-test_post_install_verify
-
-# ==================== Summary ====================
-echo ""
+ensure_platform_binaries; echo ""
+test_postinstall; echo ""
+test_install_sh; echo ""
 echo "=============================================="
-if [ "$FAILED" -eq 0 ]; then
-  echo -e "${GREEN}All E2E skill installation tests passed!${NC}"
-  exit 0
-else
-  echo -e "${RED}Some E2E skill installation tests failed.${NC}"
-  exit 1
-fi
+if [ "$FAILED" -eq 0 ]; then echo -e "${GREEN}All E2E skill installation tests passed!${NC}"; exit 0
+else echo -e "${RED}Some E2E skill installation tests failed.${NC}"; exit 1; fi
