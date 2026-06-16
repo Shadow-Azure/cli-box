@@ -99,6 +99,15 @@ else
   FAILED=1
 fi
 
+# ==================== Skill Package Tests (node:test) ====================
+info "Running skill package tests (shared + CLI)..."
+if (cd packages/cli-box-skill && npm install --no-save --omit=optional --ignore-scripts >/dev/null 2>&1 && node --test) 2>&1; then
+  ok "Skill package tests passed"
+else
+  err "Skill package tests FAILED"
+  FAILED=1
+fi
+
 # ==================== E2E Skill Installation Tests ====================
 info "Running E2E skill installation tests..."
 if bash tests/e2e-skill-install.sh 2>&1; then

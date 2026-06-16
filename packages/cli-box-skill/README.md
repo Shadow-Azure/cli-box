@@ -5,7 +5,8 @@ macOS desktop automation sandbox for AI agents.
 ## Install
 
 ```bash
-npm install -g cli-box-skill
+npx cli-box-skill install          # interactive: pick Claude Code / OpenCode / OpenClaw
+npx cli-box-skill install claude   # non-interactive: claude | opencode | openclaw | all
 ```
 
 ## What is cli-box?
@@ -25,7 +26,7 @@ cli-box close <id>      # Close sandbox
 ## No npm?
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh) claude
 ```
 
 ## Links

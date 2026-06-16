@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 RELEASE_DIR="$SCRIPT_DIR/release"
-VERSION="0.2.6"
+VERSION="0.2.7"
 APP_NAME="CLI Box"
 
 # --- helpers ---

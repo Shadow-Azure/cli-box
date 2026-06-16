@@ -31,8 +31,8 @@
 
 | 你想 | 运行 | 效果 |
 | :--- | :--- | :--- |
-| **npm** | `npm install -g cli-box-skill` | 自动安装二进制 + skill |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)` | 下载到 `~/.cli-box/bin/`，安装 skill |
+| **npm** | `npx cli-box-skill install` | 选择 harness，自动装二进制 + skill |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh) claude` | 下载到 `~/.cli-box/bin/`，安装 skill |
 | **手动** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | 手动下载解压 |
 
 ### 给人类用户
@@ -46,13 +46,15 @@ https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installat
 
 > Agent 会处理 macOS 权限、PATH 配置和快速测试。只需在提示时确认即可。
 
-### 给 LLM Agent
+### 给 AI Agent
+
+> **一行安装 cli-box：** 运行 `npx cli-box-skill install all` 把 skill 装到所有受支持的
+> harness（Claude Code、OpenCode、OpenClaw）；把 `all` 换成 `claude` / `opencode` /
+> `openclaw` 可只装一个。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
+npx cli-box-skill install claude    # claude | opencode | openclaw | all
 ```
-
-按指引逐步执行。
 
 ### 添加 PATH
 

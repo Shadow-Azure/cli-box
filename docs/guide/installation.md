@@ -25,16 +25,20 @@ If curl or tar is missing, stop and ask the user to install them.
 ### Option A: npm (recommended)
 
 ```bash
-npm install -g cli-box-skill
+npx cli-box-skill install
 ```
 
-npm automatically installs the correct binaries for your platform.
+Choose Claude Code, OpenCode, and/or OpenClaw (auto-detects installed ones). Or
+non-interactively: `npx cli-box-skill install claude` (targets: `claude | opencode | openclaw | all`).
+This installs the binaries to `~/.cli-box/bin/` and the skill into the chosen harness.
 
 ### Option B: Direct download
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh) claude
 ```
+
+Pass one or more of `claude | opencode | openclaw`, or `all`.
 
 ## Step 3: Verify Installation
 
