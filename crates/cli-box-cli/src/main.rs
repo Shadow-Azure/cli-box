@@ -1701,12 +1701,17 @@ fn remove_electron_json() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// Check if the daemon on a given port responds to /health.
+/// Check if the daemon on a given port is listening.
+/// Uses TCP connect instead of HTTP to avoid reqwest::blocking panics
+/// in async/spawn_blocking contexts.
 fn daemon_health_check(port: u16) -> bool {
-    let url = format!("http://127.0.0.1:{port}/health");
-    reqwest::blocking::get(&url)
-        .map(|resp| resp.status().is_success())
-        .unwrap_or(false)
+    use std::net::TcpStream;
+    use std::time::Duration as StdDuration;
+    TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        StdDuration::from_secs(2),
+    )
+    .is_ok()
 }
 
 /// Ensure we have a healthy daemon process.
@@ -1740,8 +1745,8 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
         .spawn()
         .context("Failed to launch cli-box-daemon")?;
 
-    // Wait for daemon.json to appear + /health to respond (up to 10s)
-    let timeout = std::time::Duration::from_secs(10);
+    // Wait for daemon.json to appear + /health to respond (up to 30s)
+    let timeout = std::time::Duration::from_secs(30);
     let start = std::time::Instant::now();
     let port = loop {
         if start.elapsed() > timeout {
@@ -1750,10 +1755,15 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
                 timeout.as_secs()
             );
         }
-        if let Some(info) = cli_box_core::daemon::read_daemon_info() {
-            if daemon_health_check(info.port) {
-                break info.port;
+        match cli_box_core::daemon::read_daemon_info() {
+            Some(info) => {
+                let hc_port = info.port;
+                let healthy = daemon_health_check(hc_port);
+                if healthy {
+                    break info.port;
+                }
             }
+            None => {}
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     };
