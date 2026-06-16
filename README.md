@@ -28,7 +28,7 @@
 | You want | Run | What happens |
 | :--- | :--- | :--- |
 | **npm** | `npm install -g cli-box-skill` | Binaries + skill installed automatically |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)` | Downloads to `~/.cli-box/bin/`, installs skill |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)` | Downloads to `~/.cli-box/bin/`, installs skill |
 | **Manual** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | Download and extract manually |
 
 ### For Humans

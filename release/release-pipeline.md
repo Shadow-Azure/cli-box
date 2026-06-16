@@ -2,36 +2,43 @@
 
 > **This is the single source of truth for the release pipeline.**
 > When making changes to the release process, update this document first, then sync the implementation.
+> The authoritative implementation is `.github/workflows/release.yml`; this doc must stay in sync with it.
 
-**Version:** 0.2.0 | **Last updated:** 2026-06-03
+**Version:** 0.2.6 | **Last updated:** 2026-06-16
 
 ---
 
 ## Overview
 
-cli-box is distributed as a **skill package** that works with Claude Code and OpenCode out of the box. The release pipeline builds macOS binaries + Electron app, packages them into a skill tarball, and publishes to both GitHub Release and npm.
+cli-box ships on **three channels** that are all produced by one CI run:
+
+1. **GitHub Release** — macOS binaries + Electron app + skill tarball (primary, what everything else points at)
+2. **npm** — three packages: `cli-box-skill` (thin wrapper) + two platform packages that carry the native binaries/app
+3. **Direct curl** — installer script that downloads from the GitHub Release
+
+The release is **CI-driven**: pushing a `git tag vX.Y.Z` and creating a GitHub Release triggers `.github/workflows/release.yml`, which builds everything, uploads assets, and publishes npm.
 
 ```
-git tag v0.2.0 && git push --tags
+git tag vX.Y.Z  →  git push --tags
        │
        ▼
-GitHub Actions (release.yml)
-       │
-       ├─ cargo build --release (cli-box + cli-box-daemon)
-       ├─ pnpm build + pnpm pack (Electron app)
-       ├─ Package skill tarball (SKILL.md + install.sh + binaries)
+gh release create vX.Y.Z            (publishes the release)
        │
        ▼
-GitHub Release
-       ├─ cli-box                    (CLI binary, macOS arm64)
-       ├─ cli-box-daemon             (Daemon binary, macOS arm64)
-       ├─ CLI Box.app.zip            (Electron app, compressed)
-       ├─ CLI Box_*_aarch64.dmg      (macOS installer)
-       └─ cli-box-skill.tar.gz       (Skill package)
+GitHub Actions (release.yml)        triggered by release: published
        │
-       ▼
-npm (cli-box-skill)
-       └─ npx cli-box-skill install  (downloads from GitHub Release)
+       ├─ cargo build --release     (cli-box + cli-box-daemon)
+       ├─ pnpm build + pnpm pack    (Electron app → .app / .dmg)
+       ├─ Assemble skill tarball    (SKILL.md + install.sh + binaries)
+       │
+       ├─ Upload to GitHub Release  (cli-box, cli-box-daemon, CLI Box.app.zip,
+       │                            CLI-Box-app-macos-arm64.tar.gz, .dmg,
+       │                            cli-box-skill.tar.gz, README.md, release-pipeline.md)
+       │
+       └─ Publish npm (3 packages, version injected from the tag)
+            ├─ cli-box-darwin-arm64          (binaries)
+            ├─ cli-box-electron-darwin-arm64 (Electron app)
+            └─ cli-box-skill                 (depends on the two above)
 ```
 
 ---
@@ -40,56 +47,119 @@ npm (cli-box-skill)
 
 ### 1. GitHub Release (primary)
 
-All build artifacts are uploaded as GitHub Release assets. The skill tarball (`cli-box-skill.tar.gz`) is the recommended way to install.
+All build artifacts are uploaded as GitHub Release assets. The skill tarball
+(`cli-box-skill.tar.gz`) is the self-contained installer payload.
 
-**URL pattern:** `https://github.com/Shadow-Azure/cli-box/releases/download/{tag}/cli-box-skill.tar.gz`
+**URL pattern:**
+`https://github.com/Shadow-Azure/cli-box/releases/download/{tag}/cli-box-skill.tar.gz`
 
-### 2. npm (discoverability)
+### 2. npm
 
-The npm package `cli-box-skill` is a thin wrapper that points to GitHub Release. It contains:
-- `SKILL.md` — skill definition
-- `install.sh` — download + install script
-- `package.json` — npm metadata
+Three packages are published together. `cli-box-skill` is the only one users
+install directly; the platform packages are pulled in as `optionalDependencies`
+and carry the native binaries/app so `npm install -g cli-box-skill` just works.
 
-**Install command:** `npx cli-box-skill install`
+| Package | Role | Contents |
+|:---|:---|:---|
+| `cli-box-skill` | User-facing wrapper | `SKILL.md`, `install.sh`, `postinstall.mjs`, `bin/cli-box-wrapper.js`, `package.json`, `README.md` |
+| `cli-box-darwin-arm64` | Platform binaries | `bin/cli-box`, `bin/cli-box-daemon` (`os: darwin`, `cpu: arm64`) |
+| `cli-box-electron-darwin-arm64` | Platform Electron app | `app/CLI Box.app` (`os: darwin`, `cpu: arm64`) |
 
-### 3. Direct curl (for AI agents)
+**Install command:** `npm install -g cli-box-skill`
+
+On install, `postinstall.mjs` resolves the platform package, symlinks the
+binaries into `~/.cli-box/bin/`, and copies `SKILL.md` into the Claude Code /
+OpenCode skill directories.
+
+### 3. Direct curl (for AI agents / no-npm machines)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
+```
+
+The installer downloads the skill tarball from the latest GitHub Release,
+extracts binaries to `~/.cli-box/bin/`, and installs `SKILL.md` to both
+`~/.claude/skills/cli-box/` and `~/.config/opencode/skills/cli-box/`. Both the
+npm `postinstall.mjs` and this `install.sh` install the skill **unconditionally**
+— they create the target skill directories even if the harness (Claude Code /
+OpenCode) is not yet installed, so the skill is discovered as soon as the
+harness runs.
+
+---
+
+## npm Package Structure (what actually gets published)
+
+### `cli-box-skill` (source: `packages/cli-box-skill/`)
+
+```
+packages/cli-box-skill/
+├── package.json          # name, version, bin → cli-box-wrapper.js,
+│                         # optionalDependencies → platform pkgs (same version),
+│                         # files allowlist
+├── postinstall.mjs       # on `npm install -g`: symlink binaries + drop SKILL.md
+├── README.md             # npm landing README
+├── bin/
+│   └── cli-box-wrapper.js  # `cli-box` entry: delegates to the platform binary
+└── skill/
+    ├── SKILL.md          # Claude Code / OpenCode skill definition
+    └── install.sh        # curl installer (downloads from GitHub Release)
+```
+
+`package.json` highlights:
+- `"bin": { "cli-box": "./bin/cli-box-wrapper.js" }`
+- `"optionalDependencies": { "cli-box-darwin-arm64": "<ver>", "cli-box-electron-darwin-arm64": "<ver>" }`
+- `"files": ["skill/SKILL.md", "skill/install.sh", "postinstall.mjs", "bin/", "README.md"]`
+
+### `cli-box-darwin-arm64` (source: `packages/cli-box-darwin-arm64/`)
+
+```
+packages/cli-box-darwin-arm64/
+├── package.json          # os: darwin, cpu: arm64, files: ["bin/"]
+└── bin/
+    ├── cli-box           # populated by release.yml / release.sh at build time
+    └── cli-box-daemon
+```
+
+### `cli-box-electron-darwin-arm64` (source: `packages/cli-box-electron-darwin-arm64/`)
+
+```
+packages/cli-box-electron-darwin-arm64/
+├── package.json          # os: darwin, cpu: arm64, files: ["app/"]
+└── app/
+    └── CLI Box.app       # populated by release.yml / release.sh at build time
+```
+
+### Installation targets (after `npm install -g cli-box-skill`)
+
+| Component | Install path | How it gets there |
+|:---|:---|:---|
+| CLI binary | `~/.cli-box/bin/cli-box` | symlink → platform pkg `bin/cli-box` |
+| Daemon binary | `~/.cli-box/bin/cli-box-daemon` | symlink → platform pkg `bin/cli-box-daemon` |
+| Claude Code skill | `~/.claude/skills/cli-box/SKILL.md` | copied by `postinstall.mjs` |
+| OpenCode skill | `~/.config/opencode/skills/cli-box/SKILL.md` | copied by `postinstall.mjs` |
+| `cli-box` command | npm global `bin` | npm shim → `bin/cli-box-wrapper.js` |
+
+Add `~/.cli-box/bin` to PATH if you call the binary directly:
+```bash
+echo 'export PATH="$HOME/.cli-box/bin:$PATH"' >> ~/.zshrc
 ```
 
 ---
 
-## Skill Package Structure
+## GitHub Release assets
 
-The skill tarball (`cli-box-skill.tar.gz`) contains:
+Produced by the "Collect release artifacts" step of `release.yml`:
 
-```
-cli-box-skill.tar.gz
-├── SKILL.md                    # Skill definition for Claude Code / OpenCode
-├── install.sh                  # Download + extract + setup script
-└── bin/
-    ├── cli-box                 # CLI binary (macOS arm64)
-    └── cli-box-daemon          # Daemon binary (macOS arm64)
-```
-
-### Installation targets
-
-| Component | Install path | Purpose |
-|:---|:---|:---|
-| CLI binary | `~/.cli-box/bin/cli-box` | Main CLI tool |
-| Daemon binary | `~/.cli-box/bin/cli-box-daemon` | Sandbox daemon |
-| Skill file (Claude Code) | `.claude/skills/cli-box/SKILL.md` | Claude Code skill |
-| Skill file (OpenCode) | `.opencode/skills/cli-box/SKILL.md` | OpenCode skill |
-
-### PATH setup
-
-After installation, users need to add `~/.cli-box/bin` to PATH:
-
-```bash
-echo 'export PATH="$HOME/.cli-box/bin:$PATH"' >> ~/.zshrc
-```
+| Asset | Source |
+|:---|:---|
+| `cli-box` | `cargo build --release -p cli-box-cli` |
+| `cli-box-daemon` | `cargo build --release -p cli-box-daemon` |
+| `CLI Box.app.zip` | `pnpm build && pnpm run pack` (zipped `.app`) |
+| `CLI-Box-app-macos-arm64.tar.gz` | tarball of the `.app` (back-compat) |
+| `CLI.Box-{ver}-arm64.dmg` | electron-builder DMG |
+| `cli-box-skill.tar.gz` | `SKILL.md` + `install.sh` + `bin/{cli-box,cli-box-daemon}` |
+| `README.md` | release notes (regenerated by `release.sh`; in CI a small readme) |
+| `release-pipeline.md` | this document |
 
 ---
 
@@ -99,16 +169,20 @@ echo 'export PATH="$HOME/.cli-box/bin:$PATH"' >> ~/.zshrc
 
 | File | Responsibility |
 |:---|:---|
-| `skill/SKILL.md` | cli-box skill definition — commands, MCP integration, usage examples |
-| `skill/install.sh` | Installation script — download, extract, setup PATH, install skill files |
-| `skill/package.json` | npm package metadata |
-| `skill/README.md` | npm package README (brief, links to main README) |
-| `docs/guide/installation.md` | AI agent installation guide — step-by-step, includes auto-star |
-| `.github/workflows/release.yml` | GitHub Actions release workflow |
-| `release.sh` | Local release build script |
-| `README.md` | English README (oh-my-openagent style) |
-| `README.zh-cn.md` | Chinese README (preserved from original) |
-| `.github/assets/hero.png` | Hero image for README |
+| `packages/cli-box-skill/package.json` | npm metadata for the wrapper package |
+| `packages/cli-box-skill/postinstall.mjs` | npm postinstall — symlink binaries + install SKILL.md |
+| `packages/cli-box-skill/bin/cli-box-wrapper.js` | `cli-box` entry — resolves + spawns the platform binary |
+| `packages/cli-box-skill/skill/SKILL.md` | Skill definition (frontmatter `name` + `description` + usage) |
+| `packages/cli-box-skill/skill/install.sh` | curl installer (downloads from GitHub Release) |
+| `packages/cli-box-skill/README.md` | npm package README |
+| `packages/cli-box-darwin-arm64/package.json` | platform binaries package metadata |
+| `packages/cli-box-electron-darwin-arm64/package.json` | platform Electron package metadata |
+| `docs/guide/installation.md` | AI agent installation guide (includes auto-star step) |
+| `.github/workflows/release.yml` | GitHub Actions release workflow (authoritative) |
+| `.github/workflows/ci.yml` | CI Gate (tests + lint + build verify; required on main & PRs) |
+| `release.sh` | Local release build script (mirrors the CI build steps) |
+| `Cargo.toml` | workspace version (single source for Rust crates) |
+| `electron-app/package.json` | Electron app version |
 
 ### Build artifacts (generated, not committed)
 
@@ -116,152 +190,147 @@ echo 'export PATH="$HOME/.cli-box/bin:$PATH"' >> ~/.zshrc
 |:---|:---|
 | `release/cli-box` | `cargo build --release -p cli-box-cli` |
 | `release/cli-box-daemon` | `cargo build --release -p cli-box-daemon` |
-| `release/CLI Box.app` | `pnpm build && pnpm run pack` in electron-app |
-| `release/cli-box-skill.tar.gz` | Assembled from skill/ + built binaries |
+| `release/CLI Box.app` | `pnpm build && pnpm run pack` |
+| `release/cli-box-skill.tar.gz` | assembled from `skill/` + built binaries |
+| `packages/*/bin`, `packages/*/app` | populated by `release.sh` (local) — CI populates these in the runner only |
 
 ---
 
-## GitHub Actions Workflow
+## Version Management
+
+Versions are **split**: a few files are bumped manually in a PR; the npm
+`packages/*/package.json` files are rewritten by CI **at publish time** from the
+git tag, so they are *not* bumped by hand.
+
+### Bumped manually (in the release PR)
+
+| File | Field |
+|:---|:---|
+| `Cargo.toml` | `workspace.package.version` (also covers all three crates via inheritance) |
+| `electron-app/package.json` | `version` |
+| `release.sh` | `VERSION` |
+
+### Bumped automatically by CI (from the git tag)
+
+The "Publish npm packages" step in `release.yml` reads `VERSION=${GITHUB_REF_NAME#v}`
+and rewrites, via a `node -e` snippet:
+
+- `packages/cli-box-darwin-arm64/package.json` → `version`
+- `packages/cli-box-electron-darwin-arm64/package.json` → `version`
+- `packages/cli-box-skill/package.json` → `version` **and** every entry in `optionalDependencies`
+
+This is why the committed `packages/*/package.json` versions can lag behind the
+published npm versions — that is expected and harmless.
+
+### How to bump version
+
+1. Bump the three manual files above (e.g. `0.2.5` → `0.2.6`)
+2. Open a PR, wait for CI Gate to pass, squash-merge to `main` (`main` is protected)
+3. `git tag vX.Y.Z` on the merge commit → `git push origin vX.Y.Z`
+4. `gh release create vX.Y.Z` (triggers `release.yml`)
+5. CI publishes npm with the version injected from the tag
+
+---
+
+## GitHub Actions Workflow (`.github/workflows/release.yml`)
 
 ### Trigger
 
 ```yaml
 on:
   release:
-    types: [published]        # When a GitHub Release is created
-  workflow_dispatch:           # Manual trigger
-    inputs:
+    types: [published]        # GitHub Release created → runs build + npm publish
+  workflow_dispatch:           # Manual trigger (builds + uploads, but does NOT publish npm,
+    inputs:                    # because the publish step is gated on event == 'release')
       tag:
-        description: 'Release tag (e.g. v0.2.0)'
+        description: 'Release tag (e.g. v0.2.5)'
         required: true
 ```
 
+> Note: `workflow_dispatch` runs the build and uploads Release assets but **skips
+> npm publish** (the publish step is `if: github.event_name == 'release'`). To
+> publish npm, create the release through GitHub's Release UI or `gh release create`.
+
 ### Build steps
 
-1. **Checkout** — clone repo at the tag/ref
-2. **Setup Node.js 22** + **pnpm 10** + **Rust 1.88**
-3. **Install frontend dependencies** — `pnpm install --frozen-lockfile`
+1. **Checkout** at the tag
+2. **Setup** Node 22 + pnpm 10 + Rust 1.88 (+ caches)
+3. **Install frontend deps** — `pnpm install --frozen-lockfile`
 4. **Build Rust binaries** — `cargo build --release -p cli-box-cli -p cli-box-daemon`
 5. **Build Electron app** — `pnpm build && pnpm run pack`
-6. **Collect artifacts:**
-   - Copy `target/release/cli-box` → `release/`
-   - Copy `target/release/cli-box-daemon` → `release/`
-   - Copy Electron `.app` bundle → `release/CLI Box.app` + zip
-   - Copy `.dmg` installer → `release/`
-   - Assemble skill tarball → `release/cli-box-skill.tar.gz`
+6. **Collect artifacts** — copy binaries, zip/tar the `.app`, copy the `.dmg`,
+   assemble `cli-box-skill.tar.gz`
 7. **Upload to GitHub Release** — `softprops/action-gh-release@v2`
+8. **Package npm platform packages** — copy binaries/app into `packages/*/bin` and `packages/*/app`
+9. **Publish npm** (only on `release` event) — rewrite `packages/*/package.json`
+   versions from the tag, then publish in dependency order:
+   `cli-box-darwin-arm64` → `cli-box-electron-darwin-arm64` → `cli-box-skill`
 
 ### Environment
 
-| Variable | Value | Where to change |
-|:---|:---|:---|
-| `NODE_VERSION` | `22` | `release.yml` env section |
-| `PNPM_VERSION` | `10` | `release.yml` env section |
-| `RUST_VERSION` | `1.88` | `release.yml` env section |
+| Variable | Value |
+|:---|:---|
+| `NODE_VERSION` | `22` |
+| `PNPM_VERSION` | `10` |
+| `RUST_VERSION` | `1.88` |
+| `NPM_TOKEN` | repo secret (used only by the publish step) |
 
 ---
 
 ## Auto-Star Mechanism
 
-The installation guide (`docs/guide/installation.md`) includes a `gh api` command at Step 6 that stars the repository:
+`docs/guide/installation.md` includes a `gh api` call (Step ~6) that stars the repo:
 
 ```bash
 gh api --silent --method PUT /user/starred/Shadow-Azure/cli-box >/dev/null 2>&1 || true
 ```
 
-**How it works:**
-1. User pastes install prompt into an LLM agent
-2. Agent fetches `installation.md` from GitHub raw URL
-3. Agent executes steps 1-5 (download, install, verify, permissions, first use)
-4. At step 6, agent runs the `gh api` command
-5. GitHub CLI uses the user's existing auth to star the repo via REST API `PUT /user/starred/{owner}/{repo}`
-6. `--silent` + `/dev/null` + `|| true` makes it silent and non-blocking
-
-**Key design decision:** The star command is in `installation.md` (the AI agent execution guide), NOT in `SKILL.md` (the runtime usage guide). This keeps the skill pure — it only describes how to use cli-box.
+The `--silent` + `|| true` makes it non-blocking and failure-safe. It lives in
+`installation.md` (the agent execution guide), **not** in `SKILL.md` (the runtime
+usage guide), so the skill stays pure.
 
 ---
 
-## Version Management
-
-### Current version locations
-
-| File | Field | Current value |
-|:---|:---|:---|
-| `Cargo.toml` | `workspace.package.version` | `0.1.0` |
-| `crates/cli-box-core/Cargo.toml` | inherits from workspace | `0.1.0` |
-| `crates/cli-box-cli/Cargo.toml` | inherits from workspace | `0.1.0` |
-| `crates/cli-box-daemon/Cargo.toml` | inherits from workspace | `0.1.0` |
-| `electron-app/package.json` | `version` | `0.1.0` |
-| `skill/package.json` | `version` | `0.2.0` |
-| `release.sh` | `VERSION` variable | `0.1.0` |
-
-### How to bump version
-
-1. Update `Cargo.toml` workspace version
-2. Update `electron-app/package.json` version
-3. Update `skill/package.json` version
-4. Update `release.sh` VERSION variable
-5. Create git tag: `git tag v{version}`
-6. Push tag: `git push --tags`
-
----
-
-## Release Checklist
-
-### Local release (via release.sh)
+## Release Checklist (CI path — recommended)
 
 ```bash
-# 1. Bump version (see above)
-# 2. Run release build
-bash release.sh
-# 3. Verify artifacts
+# 0. Ensure main CI Gate is green for the code you're shipping
+gh run list --branch main --limit 1
+
+# 1. Bump the three manual version files (Cargo.toml, electron-app/package.json, release.sh)
+# 2. Open a PR, wait for CI Gate, squash-merge to main
+gh pr create --base main --head <branch> --title "chore: bump version to X.Y.Z"
+gh pr merge <num> --squash --delete-branch
+
+# 3. Pull main, tag, push
+git checkout main && git pull
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+
+# 4. Create the GitHub Release (triggers release.yml → build + upload + npm publish)
+gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes
+
+# 5. Watch the release run
+gh run watch --workflow=release.yml
+
+# 6. Verify
+gh release view vX.Y.Z                          # assets present
+npm view cli-box-skill version                  # == X.Y.Z
+npm view cli-box-skill optionalDependencies     # pinned to X.Y.Z
+```
+
+### Local release (via release.sh — alternative, for manual asset upload)
+
+```bash
+bash release.sh                       # builds into ./release/
 ls -lh release/
-# 4. Test the build
-release/cli-box start zsh
-# 5. Create GitHub Release and upload artifacts
-gh release create v0.2.0 release/* --title "v0.2.0" --notes "Release notes here"
+release/cli-box start zsh             # smoke test
+gh release create vX.Y.Z release/* --title "vX.Y.Z" --notes "..."
 ```
 
-### CI release (via GitHub Actions)
-
-```bash
-# 1. Bump version and commit
-# 2. Create and push tag
-git tag v0.2.0
-git push origin v0.2.0
-# 3. Create GitHub Release (triggers workflow)
-gh release create v0.2.0 --title "v0.2.0" --generate-notes
-# 4. Monitor workflow
-gh run watch
-```
-
----
-
-## npm Package
-
-### Package: `cli-box-skill`
-
-**Location in repo:** `skill/`
-
-**Contents:**
-- `package.json` — npm metadata, `os: ["darwin"]`, `cpu: ["arm64", "x64"]`
-- `SKILL.md` — skill definition
-- `install.sh` — installation script
-- `README.md` — brief npm README
-
-### Publish
-
-```bash
-cd skill
-npm publish
-```
-
-### Update
-
-```bash
-# Bump version in skill/package.json
-npm publish
-```
+`release.sh` mirrors the CI steps (Rust + Electron + skill tarball) and also
+populates `packages/*/bin` and `packages/*/app` so you can `npm publish` locally
+if needed.
 
 ---
 
@@ -269,12 +338,9 @@ npm publish
 
 ### Change the install location
 
-Edit `skill/install.sh`:
-```bash
-INSTALL_DIR="$HOME/.cli-box/bin"  # Change this path
-```
-
-Also update `docs/guide/installation.md` Step 2 if the path changes.
+Edit `packages/cli-box-skill/postinstall.mjs` (`binDir`) and
+`packages/cli-box-skill/skill/install.sh` (`INSTALL_DIR`). Update
+`docs/guide/installation.md` Step 2 if the path changes.
 
 ### Change the daemon port
 
@@ -282,50 +348,54 @@ Edit the default port in `crates/cli-box-core/src/server/mod.rs` (search for `15
 
 ### Add a new release artifact
 
-1. Add the build step in `.github/workflows/release.yml` (Collect step)
+1. Add the build/copy step in `.github/workflows/release.yml` (Collect step)
 2. Add the same step in `release.sh`
 3. Update this document
 
+### Add a new platform package (e.g. x64 / Linux)
+
+1. Add a new dir under `packages/` (e.g. `cli-box-darwin-x64/`) with `package.json`
+   (`os`/`cpu`/`files`) and a `bin/` (and/or `app/`)
+2. Add an `optionalDependencies` entry in `packages/cli-box-skill/package.json`
+3. Add the build + copy + publish steps for it in `release.yml`
+4. Update this document
+
 ### Change the star target repo
 
-Edit `docs/guide/installation.md` Step 6:
+Edit `docs/guide/installation.md`:
 ```bash
 gh api --silent --method PUT /user/starred/OWNER/REPO >/dev/null 2>&1 || true
 ```
 
 ### Change macOS permissions instructions
 
-Edit `docs/guide/installation.md` Step 4 and `skill/SKILL.md` Prerequisites section.
-
-### Add support for a new platform (e.g., Linux)
-
-1. Add Linux build job in `release.yml`
-2. Update `skill/install.sh` platform detection
-3. Update `skill/package.json` `os` field
-4. Update README badges and platform mentions
+Edit `docs/guide/installation.md` and the `## Prerequisites` section of
+`packages/cli-box-skill/skill/SKILL.md`.
 
 ---
 
 ## Troubleshooting
 
 ### release.yml fails at Electron build
+- `electron-app/pnpm-lock.yaml` is committed and up to date
+- `electron-builder.config.cjs` exists
+- `pnpm build` works locally first
 
-- Check `electron-app/pnpm-lock.yaml` is committed
-- Check `electron-builder.config.cjs` exists
-- Verify `pnpm build` works locally first
-
-### Skill tarball missing from release
-
+### Skill tarball missing from the release
 - Check the "Collect release artifacts" step in `release.yml`
-- Verify `skill/SKILL.md` and `skill/install.sh` exist in the repo
+- Verify `packages/cli-box-skill/skill/SKILL.md` and `.../install.sh` exist in the repo
+
+### npm publish step skipped
+- The publish step only runs when the workflow was triggered by a real **release**
+  event. `workflow_dispatch` runs the build/upload but intentionally skips npm
+  publish. Publish by creating the release via the UI or `gh release create`.
 
 ### npm publish fails
+- `NPM_TOKEN` secret is set and valid
+- Version in the tag is *higher* than what's on npm (CI sets the version from the tag)
+- Publish order is correct: platform packages before `cli-box-skill` (it depends on them)
 
-- Check you're logged in: `npm whoami`
-- Check `skill/package.json` version is bumped
-- Check `skill/` directory has all required files
-
-### Auto-star not working
-
-- User must have `gh` CLI installed and authenticated: `gh auth status`
-- The `|| true` ensures it fails silently — no impact on installation
+### `optionalDependencies` version mismatch on npm
+- The CI publish step rewrites `optionalDependencies` from the tag automatically.
+  If you ever publish manually, remember to update both `version` and the
+  `optionalDependencies` entries in `packages/cli-box-skill/package.json`.

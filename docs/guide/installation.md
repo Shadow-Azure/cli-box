@@ -33,7 +33,7 @@ npm automatically installs the correct binaries for your platform.
 ### Option B: Direct download
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
 ```
 
 ## Step 3: Verify Installation

@@ -32,7 +32,7 @@
 | 你想 | 运行 | 效果 |
 | :--- | :--- | :--- |
 | **npm** | `npm install -g cli-box-skill` | 自动安装二进制 + skill |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)` | 下载到 `~/.cli-box/bin/`，安装 skill |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)` | 下载到 `~/.cli-box/bin/`，安装 skill |
 | **手动** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | 手动下载解压 |
 
 ### 给人类用户
