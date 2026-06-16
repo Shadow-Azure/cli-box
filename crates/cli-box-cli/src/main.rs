@@ -410,41 +410,12 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
 
 /// Start a sandbox via the daemon: ensures daemon is running, then creates a sandbox.
 async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> {
-    let port = match cli_box_core::daemon::find_running_daemon() {
-        Some(p) => {
-            println!("Sandbox daemon already running on port {p}");
-            p
-        }
-        None => {
-            // Spawn the daemon binary
-            let daemon_bin = find_daemon_binary()?;
-            tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
+    use std::io::Write;
 
-            let _child = Command::new(&daemon_bin)
-                .spawn()
-                .context("Failed to launch cli-box-daemon")?;
+    // Step 1: Ensure healthy daemon
+    let port = ensure_healthy_daemon().await?;
 
-            // Wait for daemon.json to appear (up to 5s)
-            let timeout = std::time::Duration::from_secs(5);
-            let start = std::time::Instant::now();
-            let port = loop {
-                if start.elapsed() > timeout {
-                    anyhow::bail!(
-                        "Timeout: sandbox daemon did not start within {}s.",
-                        timeout.as_secs()
-                    );
-                }
-                if let Some(p) = cli_box_core::daemon::find_running_daemon() {
-                    break p;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            };
-            println!("Sandbox daemon started on port {port}");
-            port
-        }
-    };
-
-    // Determine mode: "app" if command ends with .app, else "cli"
+    // Step 2: Create sandbox
     let mode = if command.to_lowercase().ends_with(".app") {
         "app"
     } else {
@@ -459,7 +430,13 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
 
     println!("Creating sandbox: mode={mode}, command={full_cmd}");
 
-    let result = client::daemon_create_sandbox(mode, Some(command), args, None, None).await?;
+    let result = client::daemon_create_sandbox(mode, Some(command), args, None, None)
+        .await
+        .map_err(|e| {
+            eprintln!("Error: Failed to connect to daemon: {e}");
+            eprintln!("Hint: Run 'cli-box start' in another terminal to start the daemon.");
+            e
+        })?;
 
     println!(
         "Sandbox created: id={}, pty_pid={:?}, window_id={:?}",
@@ -467,136 +444,61 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     );
     println!("Daemon port: {port}");
 
-    // Spawn Electron only if not already running.
-    // If already running, the renderer polls /box/list and will pick up the new sandbox.
-    let electron_newly_spawned = if find_running_electron() {
-        tracing::info!("[start] Electron already running, skipping spawn");
-        false
-    } else if let Some(electron_bin) = find_electron_binary() {
-        tracing::info!("[start] spawning Electron: {}", electron_bin.display());
-        let _child = Command::new(&electron_bin)
-            .spawn()
-            .context("Failed to launch Electron app")?;
-        tracing::info!("[start] Electron launched");
-        true
-    } else {
-        tracing::warn!("[start] Electron app not found, running in headless daemon mode");
-        false
-    };
+    // Step 3: Ensure healthy Electron (renderer connected)
+    ensure_healthy_electron().await;
 
-    use std::io::Write;
-
-    // Phase 1: Wait for renderer WebSocket
-    // If Electron was already running (not freshly spawned by us), we may need to
-    // kill a stale process and retry if the renderer doesn't connect.
-    let mut retried = false;
-
-    loop {
-        print!("Waiting for renderer");
+    // Step 4: Wait for terminal readiness (CLI sandboxes only)
+    if result.pty_pid.is_some() {
+        print!("Waiting for terminal");
         let _ = std::io::stdout().flush();
 
         let timeout = std::time::Duration::from_secs(60);
         let start = std::time::Instant::now();
-        let poll_interval = std::time::Duration::from_secs(1);
+        let poll_interval = std::time::Duration::from_millis(500);
         let mut dot_count: u8 = 0;
 
-        let mut connected = false;
         loop {
             if start.elapsed() > timeout {
                 println!();
+                tracing::warn!(
+                    "[start] Terminal not ready within {}s for sandbox {}",
+                    timeout.as_secs(),
+                    result.sandbox_id
+                );
+                eprintln!(
+                    "Error: Terminal not ready within {}s for sandbox {}.",
+                    timeout.as_secs(),
+                    result.sandbox_id
+                );
+                eprintln!(
+                    "Hint: The sandbox may not have started correctly. Try closing and restarting."
+                );
                 break;
             }
 
-            match client::daemon_readiness().await {
-                Ok(resp) if resp.renderer_connected => {
+            match client::daemon_readiness_for_sandbox(&result.sandbox_id).await {
+                Ok(resp) if resp.terminal_ready => {
                     println!(" done");
-                    connected = true;
                     break;
                 }
                 Err(e) => {
-                    tracing::trace!("[start] readyz check failed (will retry): {e}");
+                    tracing::trace!("[start] terminal readyz check failed (will retry): {e}");
                 }
                 _ => {}
             }
 
             dot_count = (dot_count % 3) + 1;
             print!(
-                "\rWaiting for renderer{:<3}",
+                "\rWaiting for terminal{:<3}",
                 ".".repeat(dot_count as usize)
             );
             let _ = std::io::stdout().flush();
 
             tokio::time::sleep(poll_interval).await;
         }
-
-        if connected {
-            break;
-        }
-
-        // Renderer didn't connect. If Electron was already running (not spawned by us)
-        // and we haven't retried yet, kill the stale Electron and respawn.
-        if !electron_newly_spawned && !retried {
-            retried = true;
-            if kill_stale_electron() {
-                tracing::info!("[start] Stale Electron killed, respawning...");
-                if let Some(electron_bin) = find_electron_binary() {
-                    let _child = Command::new(&electron_bin)
-                        .spawn()
-                        .context("Failed to re-launch Electron app")?;
-                    tracing::info!("[start] Electron re-launched");
-                    continue; // Retry the wait loop
-                }
-            }
-        }
-
-        tracing::warn!(
-            "[start] Renderer WebSocket did not connect within {}s, continuing anyway",
-            timeout.as_secs()
-        );
-        break;
     }
 
-    // Phase 2: Wait for terminal readiness (xterm.js mounted)
-    print!("Waiting for terminal");
-    let _ = std::io::stdout().flush();
-
-    let timeout = std::time::Duration::from_secs(60);
-    let start = std::time::Instant::now();
-    let poll_interval = std::time::Duration::from_millis(500);
-    let mut dot_count: u8 = 0;
-
-    loop {
-        if start.elapsed() > timeout {
-            println!();
-            tracing::warn!(
-                "[start] Terminal not ready within {}s for sandbox {}, continuing anyway",
-                timeout.as_secs(),
-                result.sandbox_id
-            );
-            break;
-        }
-
-        match client::daemon_readiness_for_sandbox(&result.sandbox_id).await {
-            Ok(resp) if resp.terminal_ready => {
-                println!(" done");
-                break;
-            }
-            Err(e) => {
-                tracing::trace!("[start] terminal readyz check failed (will retry): {e}");
-            }
-            _ => {}
-        }
-
-        dot_count = (dot_count % 3) + 1;
-        print!(
-            "\rWaiting for terminal{:<3}",
-            ".".repeat(dot_count as usize)
-        );
-        let _ = std::io::stdout().flush();
-
-        tokio::time::sleep(poll_interval).await;
-    }
-
+    println!("Sandbox ready: id={}", result.sandbox_id);
     Ok(())
 }
 
@@ -661,7 +563,11 @@ async fn cmd_list_daemon() -> anyhow::Result<()> {
 /// Close a sandbox via the daemon API.
 async fn cmd_close_daemon(id: &str) -> anyhow::Result<()> {
     println!("Closing sandbox {id}...");
-    client::daemon_close(id).await?;
+    client::daemon_close(id).await.map_err(|e| {
+        eprintln!("Error: Failed to connect to daemon: {e}");
+        eprintln!("Hint: Run 'cli-box start' in another terminal to start the daemon.");
+        e
+    })?;
     println!("Sandbox {id} closed.");
     Ok(())
 }
@@ -771,7 +677,13 @@ async fn cmd_screenshot_daemon(
         )
     })?;
 
-    let result = client::daemon_screenshot(sandbox_id, with_frame).await?;
+    let result = client::daemon_screenshot(sandbox_id, with_frame)
+        .await
+        .map_err(|e| {
+            eprintln!("Error: Failed to connect to daemon: {e}");
+            eprintln!("Hint: Run 'cli-box start' in another terminal to start the daemon.");
+            e
+        })?;
 
     if result.source.as_deref() == Some("screencapturekit") {
         eprintln!("Screenshot captured with ScreenCaptureKit (full window frame).");
@@ -1234,6 +1146,14 @@ fn cmd_logs(id: Option<&str>) -> anyhow::Result<()> {
 
 async fn cmd_ui_inspect(id: &str) -> anyhow::Result<()> {
     let tree = client::daemon_ui_inspect(id).await?;
+    // For CLI/TUI sandboxes, output the markdown content directly
+    if tree.get("type").and_then(|v| v.as_str()) == Some("terminal") {
+        if let Some(md) = tree.get("markdown").and_then(|v| v.as_str()) {
+            println!("{}", md);
+            return Ok(());
+        }
+    }
+    // For App sandboxes or fallback, output full JSON
     println!("{}", serde_json::to_string_pretty(&tree)?);
     Ok(())
 }
@@ -1734,97 +1654,200 @@ fn find_electron_binary() -> Option<PathBuf> {
     None
 }
 
-/// Check if Electron is already running by reading ~/.cli-box/electron.json
-fn find_running_electron() -> bool {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let path = std::path::PathBuf::from(home)
-        .join(".cli-box")
-        .join("electron.json");
-    if !path.exists() {
-        return false;
-    }
-    let json = match std::fs::read_to_string(&path) {
-        Ok(j) => j,
-        Err(_) => return false,
-    };
-    let info: serde_json::Value = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let pid = match info["pid"].as_u64() {
-        Some(p) => p as i32,
-        None => return false,
-    };
-    let alive = std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
+/// Check if a process is alive via `kill(pid, 0)`.
+fn is_process_alive(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
         .status()
         .map(|s| s.success())
-        .unwrap_or(false);
-    if alive {
-        return true;
-    }
-    let _ = std::fs::remove_file(&path);
-    false
+        .unwrap_or(false)
 }
 
-/// Kill a stale Electron process that is alive but not responding.
-///
-/// Reads `~/.cli-box/electron.json` to get the PID, kills the process,
-/// and cleans up the file. Returns `true` if a stale process was found and killed.
-fn kill_stale_electron() -> bool {
+/// Kill a process by PID (SIGTERM, then SIGKILL if needed).
+fn kill_process(pid: i32) {
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if is_process_alive(pid) {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
+/// Read electron.json and return (pid, port).
+fn read_electron_json() -> Option<(i32, u16)> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let path = std::path::PathBuf::from(home)
         .join(".cli-box")
         .join("electron.json");
-
     if !path.exists() {
-        return false;
+        return None;
+    }
+    let json = std::fs::read_to_string(&path).ok()?;
+    let info: serde_json::Value = serde_json::from_str(&json).ok()?;
+    let pid = info["pid"].as_u64()? as i32;
+    let port = info["port"].as_u64()? as u16;
+    Some((pid, port))
+}
+
+/// Remove electron.json from disk.
+fn remove_electron_json() {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home)
+        .join(".cli-box")
+        .join("electron.json");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Check if the daemon on a given port is listening.
+/// Uses TCP connect instead of HTTP to avoid reqwest::blocking panics
+/// in async/spawn_blocking contexts.
+fn daemon_health_check(port: u16) -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration as StdDuration;
+    TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        StdDuration::from_secs(2),
+    )
+    .is_ok()
+}
+
+/// Ensure we have a healthy daemon process.
+///
+/// Reads daemon.json → checks PID alive → checks /health.
+/// If healthy, reuses the existing daemon. Otherwise kills the stale
+/// process and spawns a new daemon, waiting for readiness.
+async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
+    if let Some(info) = cli_box_core::daemon::read_daemon_info() {
+        let pid = info.pid as i32;
+        let port = info.port;
+
+        if is_process_alive(pid) && daemon_health_check(port) {
+            println!("Sandbox daemon already running on port {port} (pid={pid})");
+            return Ok(port);
+        }
+
+        // Process is dead or unhealthy — kill if alive, clean up json
+        if is_process_alive(pid) {
+            tracing::warn!("[start] Daemon pid={pid} alive but unhealthy, killing");
+            kill_process(pid);
+        }
+        let _ = cli_box_core::daemon::cleanup_daemon_info();
     }
 
-    let json = match std::fs::read_to_string(&path) {
-        Ok(j) => j,
-        Err(_) => {
-            let _ = std::fs::remove_file(&path);
-            return false;
-        }
-    };
+    // Spawn new daemon
+    let daemon_bin = find_daemon_binary()?;
+    tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
 
-    let info: serde_json::Value = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => {
-            let _ = std::fs::remove_file(&path);
-            return false;
-        }
-    };
+    let _child = Command::new(&daemon_bin)
+        .spawn()
+        .context("Failed to launch cli-box-daemon")?;
 
-    let pid = match info["pid"].as_u64() {
-        Some(p) => p as i32,
-        None => {
-            let _ = std::fs::remove_file(&path);
-            return false;
+    // Wait for daemon.json to appear + /health to respond (up to 30s)
+    let timeout = std::time::Duration::from_secs(30);
+    let start = std::time::Instant::now();
+    let port = loop {
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "Timeout: sandbox daemon did not start within {}s.",
+                timeout.as_secs()
+            );
         }
+        if let Some(info) = cli_box_core::daemon::read_daemon_info() {
+            let hc_port = info.port;
+            let healthy = daemon_health_check(hc_port);
+            if healthy {
+                break info.port;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     };
+    println!("Sandbox daemon started on port {port}");
+    Ok(port)
+}
 
-    // Check if process is alive
-    let alive = std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .map(|s| s.success())
+/// Ensure we have a healthy Electron with renderer connected to the daemon.
+///
+/// If old Electron is alive and renderer_connected → reuse (it auto-reconnects).
+/// If old Electron is alive but renderer not connected → wait (auto-reconnect
+///   is in progress via the IPC fix).
+/// If old Electron is dead → spawn new and wait for renderer_connected.
+async fn ensure_healthy_electron() {
+    use std::io::Write;
+
+    // If existing Electron is alive, just wait for renderer_connected.
+    // The IPC fix (removed cache) means old Electron auto-discovers new daemon.
+    let electron_alive = read_electron_json()
+        .map(|(pid, _)| is_process_alive(pid))
         .unwrap_or(false);
 
-    if alive {
-        tracing::info!("[start] Killing stale Electron process (pid={pid})");
-        let _ = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .status();
-        // Give it a moment to exit
-        std::thread::sleep(std::time::Duration::from_millis(500));
+    if !electron_alive {
+        // Clean up stale electron.json and spawn new Electron
+        remove_electron_json();
+
+        if let Some(electron_bin) = find_electron_binary() {
+            tracing::info!("[start] spawning Electron: {}", electron_bin.display());
+            if let Err(e) = Command::new(&electron_bin).spawn() {
+                eprintln!("Warning: Failed to launch Electron app: {e}");
+                return;
+            }
+            tracing::info!("[start] Electron launched");
+        } else {
+            tracing::warn!("[start] Electron app not found, running in headless daemon mode");
+            return;
+        }
+    } else {
+        tracing::info!(
+            "[start] Electron already running, waiting for renderer to connect/reconnect"
+        );
     }
 
-    let _ = std::fs::remove_file(&path);
-    alive
+    // Wait for renderer WebSocket to connect
+    print!("Waiting for renderer");
+    let _ = std::io::stdout().flush();
+
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_secs(1);
+    let mut dot_count: u8 = 0;
+
+    loop {
+        if start.elapsed() > timeout {
+            println!();
+            tracing::warn!(
+                "[start] Renderer WebSocket did not connect within {}s",
+                timeout.as_secs()
+            );
+            eprintln!(
+                "Error: Electron renderer did not connect within {}s.",
+                timeout.as_secs()
+            );
+            eprintln!("Hint: Screenshot functionality will not work. Try: cli-box close <id> and restart.");
+            break;
+        }
+
+        match client::daemon_readiness().await {
+            Ok(resp) if resp.renderer_connected => {
+                println!(" done");
+                break;
+            }
+            Err(e) => {
+                tracing::trace!("[start] readyz check failed (will retry): {e}");
+            }
+            _ => {}
+        }
+
+        dot_count = (dot_count % 3) + 1;
+        print!(
+            "\rWaiting for renderer{:<3}",
+            ".".repeat(dot_count as usize)
+        );
+        let _ = std::io::stdout().flush();
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 fn discover_sandbox_window() -> anyhow::Result<u32> {
@@ -1872,63 +1895,6 @@ fn is_terminal_title(title: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn find_running_electron_returns_false_when_no_file() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let path = std::path::PathBuf::from(&home)
-            .join(".cli-box")
-            .join("electron.json");
-        let backup = std::fs::read_to_string(&path).ok();
-        let _ = std::fs::remove_file(&path);
-
-        let result = find_running_electron();
-        assert!(
-            !result,
-            "Should return false when electron.json doesn't exist"
-        );
-
-        if let Some(content) = backup {
-            let _ = std::fs::write(&path, content);
-        }
-    }
-
-    #[test]
-    fn find_running_electron_returns_true_for_alive_pid() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let dir = std::path::PathBuf::from(&home).join(".cli-box");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("electron.json");
-        let backup = std::fs::read_to_string(&path).ok();
-
-        // Use current PID — always alive and accessible (unlike PID 1/launchd
-        // which requires root on macOS). The function only checks if the PID
-        // is alive, not that it's actually Electron.
-        let self_pid = std::process::id();
-        let _ = std::fs::write(
-            &path,
-            serde_json::json!({"pid": self_pid, "port": 15801}).to_string(),
-        );
-
-        // Read back to confirm our write stuck (not overwritten by real Electron)
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        if content.contains(&format!("\"pid\":{self_pid}")) {
-            let result = find_running_electron();
-            assert!(
-                result,
-                "Should return true when alive PID {self_pid} is in electron.json"
-            );
-        }
-        // else: real Electron overwrote the file — skip assertion
-
-        if let Some(content) = backup {
-            let _ = std::fs::write(&path, content);
-        } else {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-
     #[test]
     fn screenshot_output_creates_parent_directories() {
         let tmp = std::env::temp_dir().join(format!("cli_box_test_{}", std::process::id()));
@@ -1945,49 +1911,5 @@ mod tests {
 
         assert!(nested.exists(), "File should exist at nested path");
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn kill_stale_electron_returns_false_when_no_file() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let path = std::path::PathBuf::from(&home)
-            .join(".cli-box")
-            .join("electron.json");
-        let backup = std::fs::read_to_string(&path).ok();
-        let _ = std::fs::remove_file(&path);
-
-        let result = kill_stale_electron();
-        assert!(
-            !result,
-            "Should return false when electron.json doesn't exist"
-        );
-
-        if let Some(content) = backup {
-            let _ = std::fs::write(&path, content);
-        }
-    }
-
-    #[test]
-    fn kill_stale_electron_returns_false_for_dead_pid() {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let dir = std::path::PathBuf::from(&home).join(".cli-box");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("electron.json");
-        let backup = std::fs::read_to_string(&path).ok();
-
-        // Write a PID that is very unlikely to exist
-        let _ = std::fs::write(
-            &path,
-            serde_json::json!({"pid": 4000000, "port": 15801}).to_string(),
-        );
-
-        let result = kill_stale_electron();
-        assert!(!result, "Should return false when PID is not alive");
-
-        if let Some(content) = backup {
-            let _ = std::fs::write(&path, content);
-        } else {
-            let _ = std::fs::remove_file(&path);
-        }
     }
 }

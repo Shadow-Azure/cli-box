@@ -332,9 +332,80 @@ mod macos_impl {
         }
     }
 
+    /// Check if a window belongs to a Chromium-based browser (Chrome, Edge, etc.)
+    /// Chromium's AX tree can cause segfaults when inspected.
+    fn is_chromium_window(window_id: u32) -> bool {
+        unsafe {
+            let arr_ref = CGWindowListCopyWindowInfo(0, 0);
+            if arr_ref.is_null() {
+                return false;
+            }
+            let arr = CFArray::<*const c_void>::wrap_under_create_rule(arr_ref);
+
+            for i in 0..arr.len() {
+                let item_ref = match arr.get(i) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let item_ptr: *const c_void = *item_ref;
+                if item_ptr.is_null() {
+                    continue;
+                }
+                let dict = item_ptr as CFDictionaryRef;
+
+                let key_num = CFString::new("kCGWindowNumber");
+                let mut val_ptr: *const c_void = std::ptr::null();
+                let found = CFDictionaryGetValueIfPresent(
+                    dict,
+                    key_num.as_concrete_TypeRef() as *const c_void,
+                    &mut val_ptr as *mut _,
+                );
+                if !found || val_ptr.is_null() {
+                    continue;
+                }
+                let num = CFNumber::wrap_under_get_rule(val_ptr as CFNumberRef);
+                let win_val = num.to_i64().unwrap_or(0) as u32;
+                if win_val != window_id {
+                    continue;
+                }
+
+                let key_name = CFString::new("kCGWindowOwnerName");
+                let mut name_ptr: *const c_void = std::ptr::null();
+                let found_name = CFDictionaryGetValueIfPresent(
+                    dict,
+                    key_name.as_concrete_TypeRef() as *const c_void,
+                    &mut name_ptr as *mut _,
+                );
+                if found_name && !name_ptr.is_null() {
+                    let name = cf_to_string(name_ptr as CFTypeRef);
+                    if let Some(n) = name {
+                        let lower = n.to_lowercase();
+                        return lower.contains("chrome")
+                            || lower.contains("edge")
+                            || lower.contains("brave")
+                            || lower.contains("vivaldi");
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    /// Activate Chromium accessibility tree.
     impl UiInspector {
         pub fn inspect_window(window_id: u32) -> Result<UiElement> {
             check_accessibility_permission()?;
+
+            // Chromium windows (Chrome, Edge, etc.) cause segfaults when inspected via AX API
+            // even with AXManualAccessibility/AXEnhancedUserInterface activation.
+            // This is a known limitation - Chromium's multi-process AX architecture
+            // has race conditions that cause crashes in HIToolbox/ApplicationServices.
+            if is_chromium_window(window_id) {
+                return Err(AppError::Accessibility(
+                    "AX inspection not supported for Chromium-based browsers (Chrome, Edge, etc.)"
+                        .to_string(),
+                ));
+            }
 
             let pid = get_pid_for_window(window_id)
                 .ok_or_else(|| AppError::WindowNotFound(format!("Window {window_id} not found")))?;
@@ -389,6 +460,14 @@ mod macos_impl {
             title: Option<&str>,
         ) -> Result<Vec<UiElement>> {
             check_accessibility_permission()?;
+
+            // Chromium windows cause segfaults when inspected via AX API
+            if is_chromium_window(window_id) {
+                return Err(AppError::Accessibility(
+                    "AX inspection not supported for Chromium-based browsers (Chrome, Edge, etc.)"
+                        .to_string(),
+                ));
+            }
 
             let pid = get_pid_for_window(window_id)
                 .ok_or_else(|| AppError::WindowNotFound(format!("Window {window_id} not found")))?;

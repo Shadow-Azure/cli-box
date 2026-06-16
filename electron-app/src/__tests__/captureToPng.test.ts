@@ -48,7 +48,7 @@ function installCanvasMock() {
   mockCanvasToDataURL = vi.fn(() => "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
 
   const origCreate = document.createElement.bind(document);
-  vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+  vi.spyOn(document, "createElement").mockImplementation((tag: string): any => {
     if (tag === "canvas") {
       const mockCanvas = {
         width: 0,
@@ -155,7 +155,7 @@ describe("captureToPng buffer fallback", () => {
   it("should return null when canvas getContext returns null", () => {
     // Simulate getContext failure
     vi.restoreAllMocks();
-    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+    vi.spyOn(document, "createElement").mockImplementation((tag: string): any => {
       if (tag === "canvas") {
         return {
           width: 0,
@@ -270,7 +270,7 @@ describe("captureToPng buffer fallback", () => {
     // Capture the canvas object to check dimensions
     let capturedCanvas: { width: number; height: number } | null = null;
     const origCreate = document.createElement.bind(document);
-    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+    vi.spyOn(document, "createElement").mockImplementation((tag: string): any => {
       if (tag === "canvas") {
         const c = {
           width: 0,

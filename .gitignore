@@ -44,3 +44,4 @@ coverage/
 release_test/
 !release/release-pipeline.md
 .claude.worktrees
+.worktrees/
