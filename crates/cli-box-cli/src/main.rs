@@ -573,7 +573,10 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
             "[start] Renderer WebSocket did not connect within {}s",
             timeout.as_secs()
         );
-        eprintln!("Error: Electron renderer did not connect within {}s.", timeout.as_secs());
+        eprintln!(
+            "Error: Electron renderer did not connect within {}s.",
+            timeout.as_secs()
+        );
         eprintln!("Hint: Screenshot functionality will not work. Check if Electron is running.");
         eprintln!("      Try: cli-box close <id> and restart, or check system permissions.");
         break;
@@ -598,8 +601,14 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
                     timeout.as_secs(),
                     result.sandbox_id
                 );
-                eprintln!("Error: Terminal not ready within {}s for sandbox {}.", timeout.as_secs(), result.sandbox_id);
-                eprintln!("Hint: The sandbox may not have started correctly. Try closing and restarting.");
+                eprintln!(
+                    "Error: Terminal not ready within {}s for sandbox {}.",
+                    timeout.as_secs(),
+                    result.sandbox_id
+                );
+                eprintln!(
+                    "Hint: The sandbox may not have started correctly. Try closing and restarting."
+                );
                 break;
             }
 
@@ -689,13 +698,11 @@ async fn cmd_list_daemon() -> anyhow::Result<()> {
 /// Close a sandbox via the daemon API.
 async fn cmd_close_daemon(id: &str) -> anyhow::Result<()> {
     println!("Closing sandbox {id}...");
-    client::daemon_close(id)
-        .await
-        .map_err(|e| {
-            eprintln!("Error: Failed to connect to daemon: {e}");
-            eprintln!("Hint: Run 'cli-box start' in another terminal to start the daemon.");
-            e
-        })?;
+    client::daemon_close(id).await.map_err(|e| {
+        eprintln!("Error: Failed to connect to daemon: {e}");
+        eprintln!("Hint: Run 'cli-box start' in another terminal to start the daemon.");
+        e
+    })?;
     println!("Sandbox {id} closed.");
     Ok(())
 }
@@ -1887,6 +1894,88 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
     };
     println!("Sandbox daemon started on port {port}");
     Ok(port)
+}
+
+/// Ensure we have a healthy Electron with renderer connected to the daemon.
+///
+/// If old Electron is alive and renderer_connected → reuse (it auto-reconnects).
+/// If old Electron is alive but renderer not connected → wait (auto-reconnect
+///   is in progress via the IPC fix).
+/// If old Electron is dead → spawn new and wait for renderer_connected.
+async fn ensure_healthy_electron() {
+    use std::io::Write;
+
+    // If existing Electron is alive, just wait for renderer_connected.
+    // The IPC fix (removed cache) means old Electron auto-discovers new daemon.
+    let electron_alive = read_electron_json()
+        .map(|(pid, _)| is_process_alive(pid))
+        .unwrap_or(false);
+
+    if !electron_alive {
+        // Clean up stale electron.json and spawn new Electron
+        remove_electron_json();
+
+        if let Some(electron_bin) = find_electron_binary() {
+            tracing::info!("[start] spawning Electron: {}", electron_bin.display());
+            if let Err(e) = Command::new(&electron_bin).spawn() {
+                eprintln!("Warning: Failed to launch Electron app: {e}");
+                return;
+            }
+            tracing::info!("[start] Electron launched");
+        } else {
+            tracing::warn!("[start] Electron app not found, running in headless daemon mode");
+            return;
+        }
+    } else {
+        tracing::info!(
+            "[start] Electron already running, waiting for renderer to connect/reconnect"
+        );
+    }
+
+    // Wait for renderer WebSocket to connect
+    print!("Waiting for renderer");
+    let _ = std::io::stdout().flush();
+
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    let poll_interval = std::time::Duration::from_secs(1);
+    let mut dot_count: u8 = 0;
+
+    loop {
+        if start.elapsed() > timeout {
+            println!();
+            tracing::warn!(
+                "[start] Renderer WebSocket did not connect within {}s",
+                timeout.as_secs()
+            );
+            eprintln!(
+                "Error: Electron renderer did not connect within {}s.",
+                timeout.as_secs()
+            );
+            eprintln!("Hint: Screenshot functionality will not work. Try: cli-box close <id> and restart.");
+            break;
+        }
+
+        match client::daemon_readiness().await {
+            Ok(resp) if resp.renderer_connected => {
+                println!(" done");
+                break;
+            }
+            Err(e) => {
+                tracing::trace!("[start] readyz check failed (will retry): {e}");
+            }
+            _ => {}
+        }
+
+        dot_count = (dot_count % 3) + 1;
+        print!(
+            "\rWaiting for renderer{:<3}",
+            ".".repeat(dot_count as usize)
+        );
+        let _ = std::io::stdout().flush();
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 /// Check if Electron is already running by reading ~/.cli-box/electron.json
