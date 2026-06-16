@@ -78,3 +78,27 @@ test("install with unknown target exits non-zero", () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("install --no-tui with no target exits 1", () => {
+  const home = tmpHome();
+  try {
+    const r = run(["install", "--no-tui"], home);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr + r.stdout, /Specify targets/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("install --no-tui claude succeeds", () => {
+  const home = tmpHome();
+  try {
+    const r = run(["install", "--no-tui", "claude"], home);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(
+      fs.existsSync(path.join(home, ".claude", "skills", "cli-box", "SKILL.md"))
+    );
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

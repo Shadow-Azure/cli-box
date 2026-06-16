@@ -110,10 +110,38 @@ test_install_sh() {
   [ -f "$TMP_HOME/.claude/skills/cli-box/SKILL.md" ] && ok "  SKILL.md in Claude dir" || { err "  SKILL.md missing in Claude dir"; FAILED=1; }
   [ ! -e "$TMP_HOME/.config/opencode/skills/cli-box" ] && ok "  OpenCode dir untouched" || { err "  OpenCode dir should be untouched"; FAILED=1; }
 
-  info "  Test 2b: install.sh with no target exits 1"
-  local rc=0
-  HOME="$TMP_HOME" bash "$script" >/dev/null 2>&1 || rc=$?
+  info "  Test 2b: install.sh with no target exits 1 AND prints usage hint"
+  local rc=0 out=""
+  out=$(HOME="$TMP_HOME" bash "$script" 2>&1 1>/dev/null) || rc=$?
   if [ "$rc" -ne 1 ]; then err "  expected exit 1, got $rc"; FAILED=1; else ok "  no-target exit 1"; fi
+  if echo "$out" | grep -q "Usage:"; then ok "  usage hint printed"; else err "  usage hint NOT printed"; FAILED=1; fi
+
+  info "  Test 2c: install.sh all installs into all three harnesses"
+  local HOME_ALL; HOME_ALL=$(mktemp -d)
+  if HOME="$HOME_ALL" bash "$script" all >/dev/null 2>&1; then
+    local n=0
+    for sub in .claude .config/opencode .openclaw; do
+      [ -f "$HOME_ALL/$sub/skills/cli-box/SKILL.md" ] && n=$((n+1))
+    done
+    if [ "$n" -eq 3 ]; then ok "  'all' installed into 3 harnesses"; else err "  'all' installed into $n/3"; FAILED=1; fi
+  else
+    err "  install.sh all exited non-zero"; FAILED=1
+  fi
+  rm -rf "$HOME_ALL"
+
+  info "  Test 2d: install.sh with mixed 'claude all' expands (no Unknown-target error)"
+  local HOME_MIX; HOME_MIX=$(mktemp -d)
+  if HOME="$HOME_MIX" bash "$script" claude all >/dev/null 2>&1; then
+    ok "  mixed 'claude all' accepted"
+  else
+    err "  mixed 'claude all' failed (C1 regression)"; FAILED=1
+  fi
+  rm -rf "$HOME_MIX"
+
+  info "  Test 2e: install.sh unknown target exits non-zero"
+  rc=0
+  HOME="$TMP_HOME" bash "$script" bogus >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then ok "  unknown target exits non-zero"; else err "  unknown target should fail"; FAILED=1; fi
   info "  Test 2 complete"
 }
 

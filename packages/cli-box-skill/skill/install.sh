@@ -79,9 +79,9 @@ TARGETS=$(echo "$TARGETS_RAW" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n
 
 if [ -z "$TARGETS" ]; then
   echo ""
-  err "No install target given."
-  echo "  Usage: bash install.sh <claude|opencode|openclaw|all> [more...]"
-  echo "     or: CLI_BOX_TARGETS=claude,opencode bash install.sh"
+  echo "  ✗ No install target given." >&2
+  echo "  Usage: bash install.sh <claude|opencode|openclaw|all> [more...]" >&2
+  echo "     or: CLI_BOX_TARGETS=claude,opencode bash install.sh" >&2
   exit 1
 fi
 
@@ -93,9 +93,9 @@ install_skill_dir() {
   ok "Skill installed to $dir"
 }
 
-echo "$TARGETS" | grep -qxE 'all' && TARGETS="claude
-opencode
-openclaw"
+if echo "$TARGETS" | grep -qx 'all'; then
+  TARGETS="$(printf 'claude\nopencode\nopenclaw')"
+fi
 
 while IFS= read -r target; do
   case "$target" in
