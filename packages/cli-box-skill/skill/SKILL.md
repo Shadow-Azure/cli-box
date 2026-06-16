@@ -18,13 +18,13 @@ Both permissions must be granted manually. Add `cli-box` and `CLI Box.app` to bo
 ## Installation
 
 ```bash
-npm install -g cli-box-skill
+npx cli-box-skill install
 ```
 
-Or via GitHub Release:
+Choose Claude Code, OpenCode, and/or OpenClaw. Or non-interactively:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
+npx cli-box-skill install claude   # claude | opencode | openclaw | all
 ```
 
 ## Quick Start

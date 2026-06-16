@@ -27,8 +27,8 @@
 
 | You want | Run | What happens |
 | :--- | :--- | :--- |
-| **npm** | `npm install -g cli-box-skill` | Binaries + skill installed automatically |
-| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)` | Downloads to `~/.cli-box/bin/`, installs skill |
+| **npm** | `npx cli-box-skill install` | Choose harness(es); binaries + skill installed |
+| **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh) claude` | Downloads to `~/.cli-box/bin/`, installs skill |
 | **Manual** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | Download and extract manually |
 
 ### For Humans
@@ -44,11 +44,14 @@ https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installat
 
 ### For LLM Agents
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installation.md
-```
+> **Install cli-box in one command:** run
+> `npx cli-box-skill install all` to install the skill into every supported
+> harness (Claude Code, OpenCode, OpenClaw), or replace `all` with `claude` /
+> `opencode` / `openclaw` for a single target.
 
-Follow the guide step by step.
+```bash
+npx cli-box-skill install claude    # claude | opencode | openclaw | all
+```
 
 ### Add to PATH
 
