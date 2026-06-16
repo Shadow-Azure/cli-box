@@ -4,7 +4,7 @@
 > When making changes to the release process, update this document first, then sync the implementation.
 > The authoritative implementation is `.github/workflows/release.yml`; this doc must stay in sync with it.
 
-**Version:** 0.2.6 | **Last updated:** 2026-06-16
+**Version:** 0.2.7 | **Last updated:** 2026-06-16
 
 ---
 
@@ -67,9 +67,12 @@ and carry the native binaries/app so `npm install -g cli-box-skill` just works.
 
 **Install command:** `npm install -g cli-box-skill`
 
-On install, `postinstall.mjs` resolves the platform package, symlinks the
-binaries into `~/.cli-box/bin/`, and copies `SKILL.md` into the Claude Code /
-OpenCode skill directories.
+On install, `postinstall.mjs` only symlinks binaries and prints guidance — it does
+**not** copy the skill. Users run `npx cli-box-skill install` (interactive) or
+`cli-box-skill install <claude|opencode|openclaw|all>` (explicit) to place the
+skill. `install.sh` (curl) takes the same target args. Skill targets: Claude Code
+`~/.claude/skills/cli-box/`, OpenCode `~/.config/opencode/skills/cli-box/`,
+OpenClaw `~/.openclaw/skills/cli-box/`.
 
 ### 3. Direct curl (for AI agents / no-npm machines)
 
