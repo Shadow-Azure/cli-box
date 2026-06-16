@@ -24,7 +24,7 @@ npm install -g cli-box-skill
 Or via GitHub Release:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
 ```
 
 ## Quick Start

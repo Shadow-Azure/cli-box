@@ -32,6 +32,6 @@ child.on('exit', (code) => process.exit(code ?? 1));
 child.on('error', (err) => {
   console.error(`Failed to run cli-box: ${err.message}`);
   console.error('Install via: npm install -g cli-box-skill');
-  console.error('Or: bash <(curl -fsSL https://raw.githubusercontent.com/ZN-Ice/cli-box/main/skill/install.sh)');
+  console.error('Or: bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)');
   process.exit(1);
 });

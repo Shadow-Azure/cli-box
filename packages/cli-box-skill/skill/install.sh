@@ -63,20 +63,16 @@ chmod +x "$INSTALL_DIR/cli-box" "$INSTALL_DIR/cli-box-daemon"
 ok "Binaries installed"
 
 # Install skill to Claude Code
-if [ -d "$(dirname "$SKILL_CLAUDE_DIR")" ]; then
-    info "Installing skill to Claude Code..."
-    mkdir -p "$SKILL_CLAUDE_DIR"
-    cp "$TMPDIR/SKILL.md" "$SKILL_CLAUDE_DIR/"
-    ok "Skill installed to $SKILL_CLAUDE_DIR"
-fi
+info "Installing skill to Claude Code..."
+mkdir -p "$SKILL_CLAUDE_DIR"
+cp "$TMPDIR/SKILL.md" "$SKILL_CLAUDE_DIR/"
+ok "Skill installed to $SKILL_CLAUDE_DIR"
 
 # Install skill to OpenCode
-if [ -d "$(dirname "$SKILL_OPENCODE_DIR")" ]; then
-    info "Installing skill to OpenCode..."
-    mkdir -p "$SKILL_OPENCODE_DIR"
-    cp "$TMPDIR/SKILL.md" "$SKILL_OPENCODE_DIR/"
-    ok "Skill installed to $SKILL_OPENCODE_DIR"
-fi
+info "Installing skill to OpenCode..."
+mkdir -p "$SKILL_OPENCODE_DIR"
+cp "$TMPDIR/SKILL.md" "$SKILL_OPENCODE_DIR/"
+ok "Skill installed to $SKILL_OPENCODE_DIR"
 
 # Check PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

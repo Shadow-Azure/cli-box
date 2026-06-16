@@ -38,7 +38,7 @@ try {
   ok(`Found platform package: ${platformPkgName}`);
 } catch (e) {
   warn(`Platform package ${platformPkgName} not found. Skipping binary setup.`);
-  warn('You can install binaries manually via: bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)');
+  warn('You can install binaries manually via: bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)');
   process.exit(0);
 }
 
@@ -74,13 +74,12 @@ const targets = [
 
 for (const target of targets) {
   try {
-    if (fs.existsSync(path.dirname(target))) {
-      fs.mkdirSync(target, { recursive: true });
-      fs.copyFileSync(skillSrc, path.join(target, 'SKILL.md'));
-      ok(`SKILL.md → ${target}/`);
-    }
+    fs.mkdirSync(target, { recursive: true });
+    fs.copyFileSync(skillSrc, path.join(target, 'SKILL.md'));
+    ok(`SKILL.md → ${target}/`);
   } catch (e) {
-    // Silent — target harness may not be installed
+    // Non-fatal — target location may be read-only or unavailable
+    warn(`Could not install SKILL.md to ${target}: ${e.message}`);
   }
 }
 

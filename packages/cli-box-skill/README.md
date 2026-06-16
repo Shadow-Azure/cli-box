@@ -25,7 +25,7 @@ cli-box close <id>      # Close sandbox
 ## No npm?
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/skill/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh)
 ```
 
 ## Links
