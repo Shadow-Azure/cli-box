@@ -410,55 +410,12 @@ async fn cmd_start(command: &str, args: &[String]) -> anyhow::Result<()> {
 
 /// Start a sandbox via the daemon: ensures daemon is running, then creates a sandbox.
 async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> {
-    // Clean up stale Electron processes before starting.
-    // Stale Electron processes can hold old WebSocket connections and prevent
-    // the new renderer from connecting to the daemon's screenshot WebSocket.
-    cleanup_stale_electron_processes();
+    use std::io::Write;
 
-    // Try to find a running daemon: first via daemon.json, then by probing
-    // the default port range. This handles the case where daemon.json was
-    // deleted but the daemon is still alive on the default port.
-    let port = match cli_box_core::daemon::find_running_daemon() {
-        Some(p) => {
-            println!("Sandbox daemon already running on port {p}");
-            p
-        }
-        None => {
-            // daemon.json not found or stale — probe default port range
-            if let Some(p) = probe_running_daemon() {
-                println!("Sandbox daemon already running on port {p} (discovered via port probe)");
-                p
-            } else {
-                // Spawn the daemon binary
-                let daemon_bin = find_daemon_binary()?;
-                tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
+    // Step 1: Ensure healthy daemon
+    let port = ensure_healthy_daemon().await?;
 
-                let _child = Command::new(&daemon_bin)
-                    .spawn()
-                    .context("Failed to launch cli-box-daemon")?;
-
-                // Wait for daemon.json to appear (up to 5s)
-                let timeout = std::time::Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                let port = loop {
-                    if start.elapsed() > timeout {
-                        anyhow::bail!(
-                            "Timeout: sandbox daemon did not start within {}s.",
-                            timeout.as_secs()
-                        );
-                    }
-                    if let Some(p) = cli_box_core::daemon::find_running_daemon() {
-                        break p;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                };
-                println!("Sandbox daemon started on port {port}");
-                port
-            }
-        }
-    };
-
-    // Determine mode: "app" if command ends with .app, else "cli"
+    // Step 2: Create sandbox
     let mode = if command.to_lowercase().ends_with(".app") {
         "app"
     } else {
@@ -487,103 +444,10 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     );
     println!("Daemon port: {port}");
 
-    // Spawn Electron only if not already running.
-    // If already running, the renderer polls /box/list and will pick up the new sandbox.
-    let electron_newly_spawned = if find_running_electron() {
-        tracing::info!("[start] Electron already running, skipping spawn");
-        false
-    } else if let Some(electron_bin) = find_electron_binary() {
-        tracing::info!("[start] spawning Electron: {}", electron_bin.display());
-        let _child = Command::new(&electron_bin)
-            .spawn()
-            .context("Failed to launch Electron app")?;
-        tracing::info!("[start] Electron launched");
-        true
-    } else {
-        tracing::warn!("[start] Electron app not found, running in headless daemon mode");
-        false
-    };
+    // Step 3: Ensure healthy Electron (renderer connected)
+    ensure_healthy_electron().await;
 
-    use std::io::Write;
-
-    // Phase 1: Wait for renderer WebSocket
-    // If Electron was already running (not freshly spawned by us), we may need to
-    // kill a stale process and retry if the renderer doesn't connect.
-    let mut retried = false;
-
-    loop {
-        print!("Waiting for renderer");
-        let _ = std::io::stdout().flush();
-
-        let timeout = std::time::Duration::from_secs(60);
-        let start = std::time::Instant::now();
-        let poll_interval = std::time::Duration::from_secs(1);
-        let mut dot_count: u8 = 0;
-
-        let mut connected = false;
-        loop {
-            if start.elapsed() > timeout {
-                println!();
-                break;
-            }
-
-            match client::daemon_readiness().await {
-                Ok(resp) if resp.renderer_connected => {
-                    println!(" done");
-                    connected = true;
-                    break;
-                }
-                Err(e) => {
-                    tracing::trace!("[start] readyz check failed (will retry): {e}");
-                }
-                _ => {}
-            }
-
-            dot_count = (dot_count % 3) + 1;
-            print!(
-                "\rWaiting for renderer{:<3}",
-                ".".repeat(dot_count as usize)
-            );
-            let _ = std::io::stdout().flush();
-
-            tokio::time::sleep(poll_interval).await;
-        }
-
-        if connected {
-            break;
-        }
-
-        // Renderer didn't connect. If Electron was already running (not spawned by us)
-        // and we haven't retried yet, kill the stale Electron and respawn.
-        if !electron_newly_spawned && !retried {
-            retried = true;
-            if kill_stale_electron() {
-                tracing::info!("[start] Stale Electron killed, respawning...");
-                if let Some(electron_bin) = find_electron_binary() {
-                    let _child = Command::new(&electron_bin)
-                        .spawn()
-                        .context("Failed to re-launch Electron app")?;
-                    tracing::info!("[start] Electron re-launched");
-                    continue; // Retry the wait loop
-                }
-            }
-        }
-
-        tracing::warn!(
-            "[start] Renderer WebSocket did not connect within {}s",
-            timeout.as_secs()
-        );
-        eprintln!(
-            "Error: Electron renderer did not connect within {}s.",
-            timeout.as_secs()
-        );
-        eprintln!("Hint: Screenshot functionality will not work. Check if Electron is running.");
-        eprintln!("      Try: cli-box close <id> and restart, or check system permissions.");
-        break;
-    }
-
-    // Phase 2: Wait for terminal readiness (xterm.js mounted)
-    // APP sandboxes don't have PTY/terminal, so skip this phase
+    // Step 4: Wait for terminal readiness (CLI sandboxes only)
     if result.pty_pid.is_some() {
         print!("Waiting for terminal");
         let _ = std::io::stdout().flush();
@@ -634,6 +498,7 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
         }
     }
 
+    println!("Sandbox ready: id={}", result.sandbox_id);
     Ok(())
 }
 
