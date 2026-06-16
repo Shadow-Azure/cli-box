@@ -45,14 +45,14 @@ if (!gotTheLock) {
 }
 
 // IPC: renderer asks for daemon port
-// Re-check daemon on each call — daemon may have started after Electron launched
+// Always re-read daemon.json — daemon may have restarted on a different port.
+// Removing the cache ensures the renderer's onclose handler can discover
+// a new daemon port when the old one dies.
 ipcMain.handle("get-daemon-port", () => {
-  if (!daemonPort) {
-    const existingPort = findRunningDaemon();
-    if (existingPort) {
-      daemonPort = existingPort;
-      writeElectronJson(daemonPort);
-    }
+  const existingPort = findRunningDaemon();
+  if (existingPort !== daemonPort) {
+    daemonPort = existingPort;
+    if (existingPort) writeElectronJson(existingPort);
   }
   return daemonPort;
 });
