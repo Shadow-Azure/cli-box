@@ -1755,15 +1755,12 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
                 timeout.as_secs()
             );
         }
-        match cli_box_core::daemon::read_daemon_info() {
-            Some(info) => {
-                let hc_port = info.port;
-                let healthy = daemon_health_check(hc_port);
-                if healthy {
-                    break info.port;
-                }
+        if let Some(info) = cli_box_core::daemon::read_daemon_info() {
+            let hc_port = info.port;
+            let healthy = daemon_health_check(hc_port);
+            if healthy {
+                break info.port;
             }
-            None => {}
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     };
