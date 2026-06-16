@@ -226,13 +226,17 @@ target arg.
 
 | Harness | Skill install path | "Detected" heuristic |
 |:---|:---|:---|
-| Claude Code | `~/.claude/skills/cli-box/SKILL.md` | `~/.claude` exists **or** `claude` on PATH |
-| OpenCode | `~/.config/opencode/skills/cli-box/SKILL.md` | `~/.config/opencode` exists **or** `opencode` on PATH |
-| OpenClaw | `~/.openclaw/skills/cli-box/SKILL.md` | `~/.openclaw` exists **or** `openclaw` on PATH |
+| Claude Code | `~/.claude/skills/cli-box/SKILL.md` | `~/.claude` exists |
+| OpenCode | `~/.config/opencode/skills/cli-box/SKILL.md` | `~/.config/opencode` exists |
+| OpenClaw | `~/.openclaw/skills/cli-box/SKILL.md` | `~/.openclaw` exists |
 
-Detection only affects **pre-checking** in the interactive menu and the summary
-messaging — it never blocks installing into a non-detected harness (the user may
-want to pre-install the skill before the harness exists).
+Detection is **directory-based only** (not PATH). A config dir existing is a
+sound, deterministic per-home signal of "this harness is in use here", and it
+keeps `detectHarnesses(home)` testable — independent of the ambient PATH (which
+on a dev machine may have all three CLIs installed). Detection only affects
+**pre-checking** in the interactive menu; it never blocks installing into a
+non-detected harness (the user may pre-install the skill before the harness
+config dir exists).
 
 ## 7. Error handling
 
