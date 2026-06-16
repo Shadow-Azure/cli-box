@@ -9,6 +9,7 @@ VERSION="${CLI_BOX_VERSION:-latest}"
 INSTALL_DIR="$HOME/.cli-box/bin"
 SKILL_CLAUDE_DIR="$HOME/.claude/skills/cli-box"
 SKILL_OPENCODE_DIR="$HOME/.config/opencode/skills/cli-box"
+SKILL_OPENCLAW_DIR="$HOME/.openclaw/skills/cli-box"
 
 info()  { echo "  ➜  $*"; }
 ok()    { echo "  ✓  $*"; }
@@ -62,17 +63,48 @@ cp "$TMPDIR/bin/cli-box-daemon" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/cli-box" "$INSTALL_DIR/cli-box-daemon"
 ok "Binaries installed"
 
-# Install skill to Claude Code
-info "Installing skill to Claude Code..."
-mkdir -p "$SKILL_CLAUDE_DIR"
-cp "$TMPDIR/SKILL.md" "$SKILL_CLAUDE_DIR/"
-ok "Skill installed to $SKILL_CLAUDE_DIR"
+# --- Resolve install targets ---
+# Precedence: positional args > CLI_BOX_TARGETS env. Accept space- or comma-
+# separated values; "all" expands to every harness.
+if [ "$#" -gt 0 ]; then
+  TARGETS_RAW="$*"
+elif [ -n "${CLI_BOX_TARGETS:-}" ]; then
+  TARGETS_RAW="$CLI_BOX_TARGETS"
+else
+  TARGETS_RAW=""
+fi
 
-# Install skill to OpenCode
-info "Installing skill to OpenCode..."
-mkdir -p "$SKILL_OPENCODE_DIR"
-cp "$TMPDIR/SKILL.md" "$SKILL_OPENCODE_DIR/"
-ok "Skill installed to $SKILL_OPENCODE_DIR"
+# Normalize to lowercase, comma/space -> newline
+TARGETS=$(echo "$TARGETS_RAW" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n' | grep -v '^$' || true)
+
+if [ -z "$TARGETS" ]; then
+  echo ""
+  err "No install target given."
+  echo "  Usage: bash install.sh <claude|opencode|openclaw|all> [more...]"
+  echo "     or: CLI_BOX_TARGETS=claude,opencode bash install.sh"
+  exit 1
+fi
+
+install_skill_dir() {
+  local label="$1" dir="$2"
+  info "Installing skill to ${label}..."
+  mkdir -p "$dir"
+  cp "$TMPDIR/SKILL.md" "$dir/"
+  ok "Skill installed to $dir"
+}
+
+echo "$TARGETS" | grep -qxE 'all' && TARGETS="claude
+opencode
+openclaw"
+
+while IFS= read -r target; do
+  case "$target" in
+    claude)  install_skill_dir "Claude Code" "$SKILL_CLAUDE_DIR" ;;
+    opencode) install_skill_dir "OpenCode"    "$SKILL_OPENCODE_DIR" ;;
+    openclaw) install_skill_dir "OpenClaw"    "$SKILL_OPENCLAW_DIR" ;;
+    *) err "Unknown target: $target (valid: claude | opencode | openclaw | all)"; exit 1 ;;
+  esac
+done <<< "$TARGETS"
 
 # Check PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
