@@ -1837,6 +1837,58 @@ fn daemon_health_check(port: u16) -> bool {
         .unwrap_or(false)
 }
 
+/// Ensure we have a healthy daemon process.
+///
+/// Reads daemon.json → checks PID alive → checks /health.
+/// If healthy, reuses the existing daemon. Otherwise kills the stale
+/// process and spawns a new daemon, waiting for readiness.
+async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
+    if let Some(info) = cli_box_core::daemon::read_daemon_info() {
+        let pid = info.pid as i32;
+        let port = info.port;
+
+        if is_process_alive(pid) && daemon_health_check(port) {
+            println!("Sandbox daemon already running on port {port} (pid={pid})");
+            return Ok(port);
+        }
+
+        // Process is dead or unhealthy — kill if alive, clean up json
+        if is_process_alive(pid) {
+            tracing::warn!("[start] Daemon pid={pid} alive but unhealthy, killing");
+            kill_process(pid);
+        }
+        let _ = cli_box_core::daemon::cleanup_daemon_info();
+    }
+
+    // Spawn new daemon
+    let daemon_bin = find_daemon_binary()?;
+    tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
+
+    let _child = Command::new(&daemon_bin)
+        .spawn()
+        .context("Failed to launch cli-box-daemon")?;
+
+    // Wait for daemon.json to appear + /health to respond (up to 10s)
+    let timeout = std::time::Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    let port = loop {
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "Timeout: sandbox daemon did not start within {}s.",
+                timeout.as_secs()
+            );
+        }
+        if let Some(info) = cli_box_core::daemon::read_daemon_info() {
+            if daemon_health_check(info.port) {
+                break info.port;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
+    println!("Sandbox daemon started on port {port}");
+    Ok(port)
+}
+
 /// Check if Electron is already running by reading ~/.cli-box/electron.json
 fn find_running_electron() -> bool {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
