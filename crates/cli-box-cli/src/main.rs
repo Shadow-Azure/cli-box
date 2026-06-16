@@ -1782,6 +1782,61 @@ fn find_electron_binary() -> Option<PathBuf> {
     None
 }
 
+/// Check if a process is alive via `kill(pid, 0)`.
+fn is_process_alive(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Kill a process by PID (SIGTERM, then SIGKILL if needed).
+fn kill_process(pid: i32) {
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if is_process_alive(pid) {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
+/// Read electron.json and return (pid, port).
+fn read_electron_json() -> Option<(i32, u16)> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home)
+        .join(".cli-box")
+        .join("electron.json");
+    if !path.exists() {
+        return None;
+    }
+    let json = std::fs::read_to_string(&path).ok()?;
+    let info: serde_json::Value = serde_json::from_str(&json).ok()?;
+    let pid = info["pid"].as_u64()? as i32;
+    let port = info["port"].as_u64()? as u16;
+    Some((pid, port))
+}
+
+/// Remove electron.json from disk.
+fn remove_electron_json() {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let path = std::path::PathBuf::from(home)
+        .join(".cli-box")
+        .join("electron.json");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Check if the daemon on a given port responds to /health.
+fn daemon_health_check(port: u16) -> bool {
+    let url = format!("http://127.0.0.1:{port}/health");
+    reqwest::blocking::get(&url)
+        .map(|resp| resp.status().is_success())
+        .unwrap_or(false)
+}
+
 /// Check if Electron is already running by reading ~/.cli-box/electron.json
 fn find_running_electron() -> bool {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
