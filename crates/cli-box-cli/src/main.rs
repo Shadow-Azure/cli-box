@@ -415,37 +415,46 @@ async fn cmd_start_daemon(command: &str, args: &[String]) -> anyhow::Result<()> 
     // the new renderer from connecting to the daemon's screenshot WebSocket.
     cleanup_stale_electron_processes();
 
+    // Try to find a running daemon: first via daemon.json, then by probing
+    // the default port range. This handles the case where daemon.json was
+    // deleted but the daemon is still alive on the default port.
     let port = match cli_box_core::daemon::find_running_daemon() {
         Some(p) => {
             println!("Sandbox daemon already running on port {p}");
             p
         }
         None => {
-            // Spawn the daemon binary
-            let daemon_bin = find_daemon_binary()?;
-            tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
+            // daemon.json not found or stale — probe default port range
+            if let Some(p) = probe_running_daemon() {
+                println!("Sandbox daemon already running on port {p} (discovered via port probe)");
+                p
+            } else {
+                // Spawn the daemon binary
+                let daemon_bin = find_daemon_binary()?;
+                tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
 
-            let _child = Command::new(&daemon_bin)
-                .spawn()
-                .context("Failed to launch cli-box-daemon")?;
+                let _child = Command::new(&daemon_bin)
+                    .spawn()
+                    .context("Failed to launch cli-box-daemon")?;
 
-            // Wait for daemon.json to appear (up to 5s)
-            let timeout = std::time::Duration::from_secs(5);
-            let start = std::time::Instant::now();
-            let port = loop {
-                if start.elapsed() > timeout {
-                    anyhow::bail!(
-                        "Timeout: sandbox daemon did not start within {}s.",
-                        timeout.as_secs()
-                    );
-                }
-                if let Some(p) = cli_box_core::daemon::find_running_daemon() {
-                    break p;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            };
-            println!("Sandbox daemon started on port {port}");
-            port
+                // Wait for daemon.json to appear (up to 5s)
+                let timeout = std::time::Duration::from_secs(5);
+                let start = std::time::Instant::now();
+                let port = loop {
+                    if start.elapsed() > timeout {
+                        anyhow::bail!(
+                            "Timeout: sandbox daemon did not start within {}s.",
+                            timeout.as_secs()
+                        );
+                    }
+                    if let Some(p) = cli_box_core::daemon::find_running_daemon() {
+                        break p;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                };
+                println!("Sandbox daemon started on port {port}");
+                port
+            }
         }
     };
 
@@ -1805,6 +1814,24 @@ fn find_running_electron() -> bool {
     }
     let _ = std::fs::remove_file(&path);
     false
+}
+
+/// Probe the default port range (15801-15810) for a running daemon.
+/// Returns the port if a daemon responds to /health, None otherwise.
+/// Used as a fallback when daemon.json is missing but the daemon is alive.
+fn probe_running_daemon() -> Option<u16> {
+    for port in 15801..=15810 {
+        let url = format!("http://127.0.0.1:{port}/health");
+        if let Ok(resp) = reqwest::blocking::get(&url) {
+            if resp.status().is_success() {
+                // Found a live daemon on this port — update daemon.json
+                let _ = cli_box_core::daemon::write_daemon_info(port);
+                tracing::info!("[start] Found running daemon on port {port} via probe");
+                return Some(port);
+            }
+        }
+    }
+    None
 }
 
 /// Find and kill ALL stale CLI Box Electron processes by name.
