@@ -9,7 +9,7 @@
   },
   "scripts": {
     "postinstall": "node postinstall.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "optionalDependencies": {
     "cli-box-darwin-arm64": "0.2.1",

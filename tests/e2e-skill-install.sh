@@ -46,7 +46,7 @@ test_postinstall() {
   local CREATED_NM=0
   cleanup_postinstall() {
     rm -rf "$TMP_HOME"
-    if [ "$CREATED_NM" -eq 1 ]; then rm -rf "$SKILL_PKG_NM"; fi
+    if [ "$CREATED_NM" -eq 1 ]; then rm -f "$SKILL_PKG_NM/cli-box-darwin-arm64"; fi
   }
   trap cleanup_postinstall RETURN
   if [ ! -d "$SKILL_PKG_NM/cli-box-darwin-arm64" ]; then
