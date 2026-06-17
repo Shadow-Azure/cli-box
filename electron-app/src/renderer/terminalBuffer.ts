@@ -14,7 +14,7 @@ export interface BufferLineLike {
 
 export interface BufferLike {
   readonly baseY: number;
-  getLine(y: number): BufferLineLike | null;
+  getLine(y: number): BufferLineLike | null | undefined;
 }
 
 export interface RenderableTerminal {
