@@ -73,12 +73,36 @@ export function readBundledSkill() {
   return fs.readFileSync(new URL("../skill/SKILL.md", import.meta.url), "utf8");
 }
 
+// Per-harness additions appended to the bundled SKILL.md body.
+// Returns "" when the target needs no customization.
+export function targetSpecificNote(id) {
+  if (id === "openclaw") {
+    return [
+      "",
+      "## Notes for OpenClaw",
+      "",
+      "OpenClaw can only read files under `/tmp/openclaw/`. When you take a",
+      "screenshot, **write the output there** or OpenClaw cannot read or send the",
+      "image:",
+      "",
+      "```bash",
+      "cli-box screenshot --id <sandbox-id> -o /tmp/openclaw/screenshot.png",
+      "```",
+      "",
+      "The directory is created automatically. Do not write screenshots to the",
+      "current working directory when driving an OpenClaw agent.",
+      "",
+    ].join("\n");
+  }
+  return "";
+}
+
 // Writes the skill body into each target dir. Returns [{id, dir, ok, error?}].
 export function installSkillToTargets(ids, { home = os.homedir(), content } = {}) {
-  const body = content ?? readBundledSkill();
   return ids.map((id) => {
     const dir = HARNESS_TARGETS[id].skillDir(home);
     try {
+      const body = (content ?? readBundledSkill()) + targetSpecificNote(id);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "SKILL.md"), body);
       return { id, dir, ok: true };
