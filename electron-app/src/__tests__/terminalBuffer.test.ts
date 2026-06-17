@@ -13,6 +13,7 @@ beforeEach(() => {
     fillRect(...args: unknown[]) { drawCalls.push({ method: "fillRect", args }); },
     fillText(...args: unknown[]) { drawCalls.push({ method: "fillText", args }); },
   };
+  const origCreate = document.createElement.bind(document);
   vi.spyOn(document, "createElement").mockImplementation((tag: string): any => {
     if (tag === "canvas") {
       return {
@@ -21,7 +22,7 @@ beforeEach(() => {
         toDataURL: () => "data:image/png;base64,AAAA",
       };
     }
-    return (document as any).__origCreate?.(tag);
+    return origCreate(tag);
   });
 });
 
@@ -58,5 +59,12 @@ describe("renderBufferToPng viewport", () => {
     const t = termWith(4, 2);
     renderBufferToPng(t, 1, 2, 9999); // huge offset → start clamped to 0
     expect(drawCalls.some((d) => d.method === "fillText" && d.args[0] === char(0))).toBe(true);
+  });
+
+  it("treats a negative scroll offset as 0 (no-op)", () => {
+    const t = termWith(4, 2);
+    renderBufferToPng(t, 1, 2, -5); // negative → clamp to 0 → start = baseY = 2
+    // baseY=2, rows=2 → visible lines 2,3 → chars 'c' (line 2), 'd' (line 3).
+    expect(drawCalls.some((d) => d.method === "fillText" && d.args[0] === char(2))).toBe(true);
   });
 });

@@ -176,13 +176,10 @@ pub async fn daemon_screenshot(
     if top {
         url.push(sep);
         url.push_str("top=true");
-        sep = '&';
     } else if let Some(n) = scroll {
         url.push(sep);
         url.push_str(&format!("scroll={n}"));
-        sep = '&';
     }
-    let _ = sep;
     let resp = client
         .get(url)
         .send()
