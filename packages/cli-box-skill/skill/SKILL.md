@@ -61,6 +61,7 @@ cli-box close <sandbox-id>
 | `cli-box start [command]` | Start sandbox (default: zsh). Supports `claude`, `opencode`, `zsh`, `bash`, or any CLI |
 | `cli-box start /path/to/App.app` | Start sandbox with a macOS application |
 | `cli-box start claude -- -p "question"` | Start sandbox with arguments |
+| `cli-box start "cd /path && claude -r"` | Compound commands run via `zsh -lc` (`&&`, `;`, `\|`, `cd`, redirects) |
 | `cli-box list` | List all active sandboxes with ID, title, status, port |
 | `cli-box close <id>` | Close a sandbox and clean up |
 | `cli-box inspect <id>` | Show sandbox details |
@@ -77,10 +78,26 @@ cli-box close <sandbox-id>
 
 ### Screenshots
 
+By default a screenshot captures the **visible viewport** — the latest content a
+human sees — not the top of the scrollback.
+
 | Command | Description |
 |---------|-------------|
 | `cli-box screenshot --id <id>` | Screenshot to stdout (base64) |
-| `cli-box screenshot --id <id> -o file.png` | Screenshot to file |
+| `cli-box screenshot --id <id> -o file.png` | Screenshot to file (visible viewport) |
+| `cli-box screenshot --id <id> --up 100 -o h.png` | Slide the capture window up 100 lines (see older output) |
+| `cli-box screenshot --id <id> --top -o top.png` | Jump to the top of the scrollback |
+
+### Session Text (scrollback)
+
+Dump the **entire session** as clean text (ANSI-free) — the full terminal buffer.
+
+| Command | Description |
+|---------|-------------|
+| `cli-box scrollback --id <id>` | Print whole session text to stdout |
+| `cli-box scrollback --id <id> -o session.txt` | Write to a file |
+| `cli-box scrollback --id <id> --raw` | Preserve trailing whitespace (default trims) |
+| `cli-box scrollback --id <id> --from-line 10 --to-line 50` | 1-based inclusive line range |
 
 ### UI Inspection
 
@@ -112,7 +129,7 @@ Add to `.claude/settings.json` or `.opencode/config.json`:
 }
 ```
 
-Then use tools: `start_sandbox`, `screenshot`, `click`, `type_text`, `press_key`, `close_sandbox`, `list_sandboxes`.
+Then use tools: `start_sandbox`, `screenshot_sandbox` (supports `up`/`top` scroll), `scrollback_sandbox`, `type_text`, `press_key`, `close_sandbox`, `list_sandboxes`.
 
 ## Typical Workflow
 

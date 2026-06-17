@@ -108,11 +108,15 @@ cli-box start node      # Node.js
 ```bash
 # 沙箱生命周期
 cli-box start [command]         # 启动沙箱（默认 zsh）
+cli-box start "cd /app && claude -r"  # 复合命令经 zsh -lc 执行
 cli-box list                    # 列出活跃沙箱
 cli-box close <id>              # 关闭沙箱
 
 # 截图 + 输入
 cli-box screenshot --id <id> -o shot.png
+cli-box screenshot --id <id> --up 100 -o history.png   # 截图窗口上移 100 行
+cli-box screenshot --id <id> --top -o top.png          # 跳到 scrollback 最顶部
+cli-box scrollback --id <id>                           # 导出整段会话文本（干净文本）
 cli-box type --id <id> "你好世界"
 cli-box key --id <id> Return
 cli-box click --id <id> 100 200
