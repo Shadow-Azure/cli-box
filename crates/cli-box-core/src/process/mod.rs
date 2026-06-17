@@ -152,6 +152,17 @@ pub fn wrap_shell_command(command: &str, args: &[String]) -> (String, Vec<String
     ("zsh".to_string(), vec!["-lc".to_string(), line])
 }
 
+/// Decide the actual (command, args) to spawn. Compound commands (those that
+/// need a shell) are re-wrapped as `zsh -lc "<line>"`; plain commands pass
+/// through unchanged.
+pub fn prepare_spawn(command: &str, args: &[String]) -> (String, Vec<String>) {
+    if needs_shell(command) {
+        wrap_shell_command(command, args)
+    } else {
+        (command.to_string(), args.to_vec())
+    }
+}
+
 /// Process manager for launching and managing apps/CLIs in the sandbox
 pub struct ProcessManager;
 
@@ -359,6 +370,9 @@ impl ProcessManager {
         cols: u16,
         rows: u16,
     ) -> Result<ProcessInfo> {
+        let (command, args) = prepare_spawn(command, args);
+        let command = command.as_str();
+        let args = args.as_slice();
         let pty_system = native_pty_system();
         let pty_pair = pty_system
             .openpty(PtySize {
@@ -769,7 +783,7 @@ impl ProcessManager {
 
 #[cfg(test)]
 mod shell_wrap_tests {
-    use super::{needs_shell, wrap_shell_command};
+    use super::{needs_shell, prepare_spawn, wrap_shell_command};
 
     #[test]
     fn plain_token_needs_no_shell() {
@@ -832,5 +846,23 @@ mod shell_wrap_tests {
         let args = vec!["a b".to_string()];
         let (_, out_args) = wrap_shell_command("echo", &args);
         assert_eq!(out_args[1], "echo a b");
+    }
+
+    #[test]
+    fn prepare_spawn_wraps_when_needed() {
+        let (cmd, args) = prepare_spawn("cd /x && claude -r", &[]);
+        assert_eq!(cmd, "zsh");
+        assert_eq!(
+            args,
+            vec!["-lc".to_string(), "cd /x && claude -r".to_string()]
+        );
+    }
+
+    #[test]
+    fn prepare_spawn_passes_through_plain_command() {
+        let args = vec!["-p".to_string(), "hi".to_string()];
+        let (cmd, args2) = prepare_spawn("claude", &args);
+        assert_eq!(cmd, "claude");
+        assert_eq!(args2, args);
     }
 }
