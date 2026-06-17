@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { Terminal } from "@xterm/xterm";
+import type { Terminal as TerminalType } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { connectPty } from "../api";
 import { renderBufferToPng } from "../terminalBuffer";
@@ -13,6 +14,7 @@ interface TerminalProps {
 
 export interface SandboxTerminalHandle {
   captureToPng(scrollOffset?: number): Promise<string>;
+  readonly terminal: TerminalType | null;
 }
 
 const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(function SandboxTerminal(
@@ -26,6 +28,9 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
   const connRef = useRef<ReturnType<typeof connectPty> | null>(null);
 
   useImperativeHandle(ref, () => ({
+    get terminal() {
+      return xtermRef.current;
+    },
     async captureToPng(scrollOffset: number = 0): Promise<string> {
       const term = xtermRef.current;
       if (!term) throw new Error("Terminal not initialized");

@@ -11,6 +11,7 @@ import {
 import { Tab, syncTabs, selectAfterClose } from "./tabState";
 import AppPanel from "./components/AppPanel";
 import { ErrorModal } from "./components/ErrorModal";
+import { readScrollback } from "./scrollback";
 import "./styles.css";
 
 declare global {
@@ -213,11 +214,11 @@ function App() {
               sandbox_id,
             }));
           } else if (msg.type === "capture_request") {
-            const { sandbox_id, request_id } = msg;
+            const { sandbox_id, request_id, scroll } = msg;
             const tabRef = terminalRefs.current.get(sandbox_id);
             if (tabRef?.current) {
               try {
-                const base64 = await tabRef.current.captureToPng();
+                const base64 = await tabRef.current.captureToPng(Number(scroll) || 0);
                 ws?.send(JSON.stringify({
                   type: "capture_response",
                   request_id,
@@ -235,6 +236,40 @@ function App() {
             } else {
               ws?.send(JSON.stringify({
                 type: "capture_error",
+                request_id,
+                sandbox_id,
+                error: "Terminal not found or not mounted",
+              }));
+            }
+          } else if (msg.type === "scrollback_request") {
+            const { sandbox_id, request_id, raw, from_line, to_line } = msg;
+            const tabRef = terminalRefs.current.get(sandbox_id);
+            if (tabRef?.current) {
+              try {
+                const terminal = tabRef.current.terminal;
+                if (!terminal) throw new Error("Terminal not available");
+                const text = readScrollback(terminal, {
+                  raw: Boolean(raw),
+                  fromLine: from_line ?? null,
+                  toLine: to_line ?? null,
+                });
+                ws?.send(JSON.stringify({
+                  type: "scrollback_response",
+                  request_id,
+                  sandbox_id,
+                  text,
+                }));
+              } catch (err) {
+                ws?.send(JSON.stringify({
+                  type: "scrollback_error",
+                  request_id,
+                  sandbox_id,
+                  error: String(err),
+                }));
+              }
+            } else {
+              ws?.send(JSON.stringify({
+                type: "scrollback_error",
                 request_id,
                 sandbox_id,
                 error: "Terminal not found or not mounted",
