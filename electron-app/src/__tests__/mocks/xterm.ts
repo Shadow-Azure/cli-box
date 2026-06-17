@@ -17,8 +17,13 @@ export class MockBufferLine {
 }
 
 export class MockBuffer {
+  baseY: number;
   private lines: MockBufferLine[];
-  constructor(lines: MockBufferLine[]) { this.lines = lines; }
+  constructor(lines: MockBufferLine[], baseY: number = 0) {
+    this.lines = lines;
+    this.baseY = baseY;
+  }
+  get length() { return this.lines.length; }
   getLine(y: number) { return this.lines[y] ?? null; }
 }
 
