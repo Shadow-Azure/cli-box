@@ -85,6 +85,8 @@ pub struct DaemonState {
     pub screenshot_ws_tx: Option<futures_util::stream::SplitSink<WebSocket, Message>>,
     /// Pending screenshot requests awaiting renderer responses.
     pub pending_screenshots: HashMap<u64, oneshot::Sender<Result<Vec<u8>, String>>>,
+    /// Pending scrollback (text) requests awaiting renderer responses.
+    pub pending_scrollback: HashMap<u64, oneshot::Sender<Result<String, String>>>,
     /// Counter for generating unique request IDs.
     pub screenshot_request_counter: u64,
     /// Sandboxes whose xterm.js terminal has been mounted and is ready.
@@ -290,6 +292,7 @@ pub fn build_daemon_router(state: Arc<Mutex<DaemonState>>) -> Router {
         .route("/box/create", post(create_sandbox_handler))
         .route("/box/{id}/close", post(close_sandbox_handler))
         .route("/box/{id}/screenshot", get(screenshot_handler))
+        .route("/box/{id}/scrollback", get(scrollback_handler))
         .route(
             "/box/{id}/screenshot/region",
             get(screenshot_region_handler),
@@ -507,6 +510,12 @@ async fn close_sandbox_handler(
 struct ScreenshotQuery {
     #[serde(default)]
     with_frame: bool,
+    /// Lines to scroll UP from the current viewport (0 = visible viewport).
+    #[serde(default)]
+    scroll: Option<u32>,
+    /// Jump to the very top of the scrollback.
+    #[serde(default)]
+    top: bool,
 }
 
 async fn screenshot_handler(
@@ -527,8 +536,14 @@ async fn screenshot_handler(
         return screenshot_with_frame(state, &id).await;
     }
 
+    // top => very large offset so the renderer clamps to the scrollback top.
+    let offset: u32 = if q.top {
+        u32::MAX
+    } else {
+        q.scroll.unwrap_or(0)
+    };
     // Default: renderer only, no SCK fallback
-    match request_renderer_screenshot(state.clone(), &id).await {
+    match request_renderer_screenshot(state.clone(), &id, offset).await {
         Ok(png_data) => {
             tracing::info!(
                 "[screenshot] sandbox {} captured via renderer ({} bytes)",
@@ -548,6 +563,41 @@ async fn screenshot_handler(
                 reason
             )))
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct ScrollbackQuery {
+    #[serde(default)]
+    raw: bool,
+    #[serde(default)]
+    from_line: Option<u32>,
+    #[serde(default)]
+    to_line: Option<u32>,
+}
+
+async fn scrollback_handler(
+    State(state): State<Arc<Mutex<DaemonState>>>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ScrollbackQuery>,
+) -> Result<Response, AppError> {
+    {
+        let s = state.lock().await;
+        if !s.sandboxes.contains_key(&id) {
+            return Err(AppError::Instance(format!("Sandbox '{id}' not found")));
+        }
+    }
+
+    match request_renderer_scrollback(state.clone(), &id, q.raw, q.from_line, q.to_line).await {
+        Ok(text) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            Ok((StatusCode::OK, headers, text).into_response())
+        }
+        Err(reason) => Err(AppError::Screenshot(format!("Scrollback failed: {reason}"))),
     }
 }
 
@@ -641,6 +691,7 @@ async fn screenshot_with_frame(
 async fn request_renderer_screenshot(
     state: Arc<Mutex<DaemonState>>,
     sandbox_id: &str,
+    scroll: u32,
 ) -> Result<Vec<u8>, String> {
     let (request_id, response_rx, mut ws_tx) = {
         let mut s = state.lock().await;
@@ -662,6 +713,7 @@ async fn request_renderer_screenshot(
         "type": "capture_request",
         "request_id": request_id,
         "sandbox_id": sandbox_id,
+        "scroll": scroll,
     });
 
     if ws_tx
@@ -688,6 +740,67 @@ async fn request_renderer_screenshot(
         Err(_) => {
             let mut s = state.lock().await;
             s.pending_screenshots.remove(&request_id);
+            Err("Renderer did not respond within 2s timeout".to_string())
+        }
+    }
+}
+
+/// Request the full session text (xterm buffer) from the renderer via WebSocket.
+async fn request_renderer_scrollback(
+    state: Arc<Mutex<DaemonState>>,
+    sandbox_id: &str,
+    raw: bool,
+    from_line: Option<u32>,
+    to_line: Option<u32>,
+) -> Result<String, String> {
+    let (request_id, response_rx, mut ws_tx) = {
+        let mut s = state.lock().await;
+        let ws_tx = s
+            .screenshot_ws_tx
+            .take()
+            .ok_or("WebSocket not connected (renderer may be closed or not yet connected)")?;
+
+        s.screenshot_request_counter += 1;
+        let request_id = s.screenshot_request_counter;
+
+        let (response_tx, response_rx) = oneshot::channel();
+        s.pending_scrollback.insert(request_id, response_tx);
+
+        (request_id, response_rx, ws_tx)
+    };
+
+    let msg = serde_json::json!({
+        "type": "scrollback_request",
+        "request_id": request_id,
+        "sandbox_id": sandbox_id,
+        "raw": raw,
+        "from_line": from_line,
+        "to_line": to_line,
+    });
+
+    if ws_tx
+        .send(Message::Text(msg.to_string().into()))
+        .await
+        .is_err()
+    {
+        let mut s = state.lock().await;
+        s.pending_scrollback.remove(&request_id);
+        s.screenshot_ws_tx = Some(ws_tx);
+        return Err("Failed to send scrollback request over WebSocket".to_string());
+    }
+
+    {
+        let mut s = state.lock().await;
+        s.screenshot_ws_tx = Some(ws_tx);
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
+        Ok(Ok(Ok(text))) => Ok(text),
+        Ok(Ok(Err(e))) => Err(format!("Renderer returned error: {e}")),
+        Ok(Err(_)) => Err("Response channel dropped (renderer may have disconnected)".to_string()),
+        Err(_) => {
+            let mut s = state.lock().await;
+            s.pending_scrollback.remove(&request_id);
             Err("Renderer did not respond within 2s timeout".to_string())
         }
     }
@@ -803,6 +916,30 @@ async fn handle_screenshot_ws(state: Arc<Mutex<DaemonState>>, socket: WebSocket)
                                         if let Some(req_id) = request_id {
                                             let mut s = state.lock().await;
                                             if let Some(tx) = s.pending_screenshots.remove(&req_id) {
+                                                let _ = tx.send(Err(error));
+                                            }
+                                        }
+                                    }
+                                    Some("scrollback_response") => {
+                                        if let (Some(req_id), Some(text)) = (
+                                            request_id,
+                                            msg.get("text").and_then(|v| v.as_str()),
+                                        ) {
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_scrollback.remove(&req_id) {
+                                                let _ = tx.send(Ok(text.to_string()));
+                                            }
+                                        }
+                                    }
+                                    Some("scrollback_error") => {
+                                        let error = msg
+                                            .get("error")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("Unknown error")
+                                            .to_string();
+                                        if let Some(req_id) = request_id {
+                                            let mut s = state.lock().await;
+                                            if let Some(tx) = s.pending_scrollback.remove(&req_id) {
                                                 let _ = tx.send(Err(error));
                                             }
                                         }
@@ -1466,6 +1603,7 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         started_at: Instant::now(),
         screenshot_ws_tx: None,
         pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
     }));
@@ -1671,6 +1809,7 @@ mod tests {
             started_at: Instant::now(),
             screenshot_ws_tx: None,
             pending_screenshots: HashMap::new(),
+            pending_scrollback: HashMap::new(),
             screenshot_request_counter: 0,
             terminal_ready_sandboxes: HashSet::new(),
         }))
@@ -1698,6 +1837,7 @@ mod tests {
             started_at: Instant::now(),
             screenshot_ws_tx: None,
             pending_screenshots: HashMap::new(),
+            pending_scrollback: HashMap::new(),
             screenshot_request_counter: 0,
             terminal_ready_sandboxes: HashSet::new(),
         }))
@@ -2062,7 +2202,7 @@ mod tests {
     #[tokio::test]
     async fn request_renderer_screenshot_returns_error_when_ws_not_connected() {
         let state = test_daemon_state_with_sandbox();
-        let result = request_renderer_screenshot(state, "test-sb").await;
+        let result = request_renderer_screenshot(state, "test-sb", 0).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
