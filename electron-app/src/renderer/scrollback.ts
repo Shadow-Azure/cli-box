@@ -5,6 +5,10 @@
 
 export interface ScrollbackCell {
   getChars(): string;
+  // Cell width in columns. 0 = wide-char continuation (the second column of a
+  // double-width CJK/emoji char); these hold no character and must be skipped
+  // so CJK text isn't padded with spaces ("执 行" → "执行").
+  getWidth(): number;
 }
 export interface ScrollbackLine {
   readonly length: number;
@@ -35,7 +39,16 @@ export function readScrollback(term: ScrollbackTerminal, opts: ScrollbackOptions
     const line = buffer.getLine(y);
     if (!line) continue;
     let s = "";
-    for (let x = 0; x < line.length; x++) s += line.getCell(x)?.getChars() || " ";
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x);
+      if (!cell) {
+        s += " ";
+        continue;
+      }
+      // Skip wide-char continuation cells so CJK/emoji text is contiguous.
+      if (cell.getWidth() === 0) continue;
+      s += cell.getChars() || " ";
+    }
     out.push(opts.raw ? s : s.replace(/\s+$/, ""));
   }
   return out.join("\n");

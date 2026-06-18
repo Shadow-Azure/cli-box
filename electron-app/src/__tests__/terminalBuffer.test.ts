@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { MockBufferLine, MockTerminal } from "./mocks/xterm";
+import { MockBufferLine, MockCell, MockTerminal } from "./mocks/xterm";
 import { renderBufferToPng, type RenderableTerminal } from "../renderer/terminalBuffer";
 
 let drawCalls: { method: string; args: unknown[] }[];
@@ -66,5 +66,20 @@ describe("renderBufferToPng viewport", () => {
     renderBufferToPng(t, 1, 2, -5); // negative → clamp to 0 → start = baseY = 2
     // baseY=2, rows=2 → visible lines 2,3 → chars 'c' (line 2), 'd' (line 3).
     expect(drawCalls.some((d) => d.method === "fillText" && d.args[0] === char(2))).toBe(true);
+  });
+
+  it("skips wide-char continuation cells (no spurious glyph)", () => {
+    // Double-width char at col 0 (width 2) + 0-width continuation at col 1.
+    // Only "执" should be drawn; the continuation must not emit a space glyph.
+    const line = MockBufferLine.fromCells([
+      new MockCell("执", 0, 2),
+      new MockCell("", 0, 0),
+    ]);
+    const t = new MockTerminal([line]) as unknown as RenderableTerminal;
+    renderBufferToPng(t, 2, 1, 0);
+    const text = drawCalls
+      .filter((d) => d.method === "fillText")
+      .map((d) => d.args[0]);
+    expect(text).toEqual(["执"]);
   });
 });

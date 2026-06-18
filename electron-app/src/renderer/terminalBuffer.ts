@@ -5,6 +5,9 @@
 export interface BufferCellLike {
   getChars(): string;
   getFgColor(): number;
+  // Cell width in columns. 0 = wide-char continuation (second column of a
+  // double-width CJK/emoji char); holds no glyph, so skip it.
+  getWidth(): number;
 }
 
 export interface BufferLineLike {
@@ -59,6 +62,8 @@ export function renderBufferToPng(
     if (!line) continue;
     for (let x = 0; x < line.length; x++) {
       const cell = line.getCell(x);
+      // Skip wide-char continuation cells (no glyph of their own).
+      if (cell && cell.getWidth() === 0) continue;
       const char = cell?.getChars() || " ";
       const fg = cell?.getFgColor();
       if (fg && fg !== 0) {
@@ -66,6 +71,8 @@ export function renderBufferToPng(
       } else {
         ctx.fillStyle = "#cccccc";
       }
+      // NOTE: wide chars (getWidth()===2) are drawn at single CHAR_WIDTH here;
+      // making them span two columns is a separate rendering refinement.
       ctx.fillText(char, x * CHAR_WIDTH, y * LINE_HEIGHT);
     }
   }
