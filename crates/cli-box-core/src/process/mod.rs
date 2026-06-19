@@ -117,6 +117,52 @@ pub fn cleanup_chromium_data(sandbox_id: &str) {
     }
 }
 
+/// Shell metacharacters that require the command to run through a shell.
+const SHELL_METACHARS: &[char] = &[
+    '&', ';', '|', '<', '>', '$', '`', '(', ')', '*', '?', '\n', '!',
+];
+
+/// Returns true when `command` must be interpreted by a shell: it either
+/// contains a space (command-with-args passed as one token) or any shell
+/// metacharacter (`&&`, `;`, pipes, redirects, `$`, glob chars, ...).
+pub fn needs_shell(command: &str) -> bool {
+    command.contains(' ') || command.chars().any(|c| SHELL_METACHARS.contains(&c))
+}
+
+/// Re-wrap a (command, args) pair into a login-shell invocation
+/// `zsh -lc "<full line>"`. The full line is `command` + `args` joined by
+/// single spaces. The caller has already decided wrapping is needed
+/// (see [`needs_shell`]).
+///
+/// # No escaping is performed
+///
+/// `args` are concatenated with single spaces, NOT shell-quoted. This is
+/// intentional: the whole line is meant to be re-interpreted by the shell
+/// (so `&&`, `|`, `$VAR`, globs, and quoted substrings all work). Callers
+/// pass a single already-formed command line; they must NOT pass individual
+/// args that should be preserved as distinct shell tokens. For an arg that
+/// itself contains spaces or metacharacters and must survive as one token,
+/// the caller is responsible for pre-quoting it.
+pub fn wrap_shell_command(command: &str, args: &[String]) -> (String, Vec<String>) {
+    let mut line = String::from(command);
+    for a in args {
+        line.push(' ');
+        line.push_str(a);
+    }
+    ("zsh".to_string(), vec!["-lc".to_string(), line])
+}
+
+/// Decide the actual (command, args) to spawn. Compound commands (those that
+/// need a shell) are re-wrapped as `zsh -lc "<line>"`; plain commands pass
+/// through unchanged.
+pub fn prepare_spawn(command: &str, args: &[String]) -> (String, Vec<String>) {
+    if needs_shell(command) {
+        wrap_shell_command(command, args)
+    } else {
+        (command.to_string(), args.to_vec())
+    }
+}
+
 /// Process manager for launching and managing apps/CLIs in the sandbox
 pub struct ProcessManager;
 
@@ -324,6 +370,9 @@ impl ProcessManager {
         cols: u16,
         rows: u16,
     ) -> Result<ProcessInfo> {
+        let (command, args) = prepare_spawn(command, args);
+        let command = command.as_str();
+        let args = args.as_slice();
         let pty_system = native_pty_system();
         let pty_pair = pty_system
             .openpty(PtySize {
@@ -729,5 +778,91 @@ impl ProcessManager {
         Err(AppError::Process(
             "get_store only supported on macOS".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod shell_wrap_tests {
+    use super::{needs_shell, prepare_spawn, wrap_shell_command};
+
+    #[test]
+    fn plain_token_needs_no_shell() {
+        assert!(!needs_shell("claude"));
+        assert!(!needs_shell("zsh"));
+        assert!(!needs_shell("/usr/local/bin/node"));
+    }
+
+    #[test]
+    fn spaced_command_needs_shell() {
+        assert!(needs_shell("claude -p hi"));
+        assert!(needs_shell("echo hello world"));
+    }
+
+    #[test]
+    fn metacharacters_need_shell() {
+        for cmd in [
+            "cd /x && claude -r",
+            "a;b",
+            "a|b",
+            "a>b",
+            "a<b",
+            "echo $HOME",
+            "echo `date`",
+            "echo $(date)",
+            "cat a*",
+            "ls ?",
+            "a\nb",
+            "!cmd",
+        ] {
+            assert!(needs_shell(cmd), "expected needs_shell true for {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_rewrites_to_zsh_login_shell() {
+        let (cmd, args) = wrap_shell_command("cd /x && claude -r", &[]);
+        assert_eq!(cmd, "zsh");
+        assert_eq!(
+            args,
+            vec!["-lc".to_string(), "cd /x && claude -r".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_joins_args_into_single_line() {
+        let args = vec!["-p".to_string(), "hi there".to_string()];
+        let (cmd, out_args) = wrap_shell_command("claude", &args);
+        assert_eq!(cmd, "zsh");
+        assert_eq!(
+            out_args,
+            vec!["-lc".to_string(), "claude -p hi there".to_string()]
+        );
+    }
+
+    #[test]
+    fn wrap_joins_arg_tokens_with_single_spaces() {
+        // Args are concatenated with single spaces; an arg containing a space
+        // is NOT preserved as a distinct quoted token (no escaping is done).
+        let args = vec!["a b".to_string()];
+        let (_, out_args) = wrap_shell_command("echo", &args);
+        assert_eq!(out_args[1], "echo a b");
+    }
+
+    #[test]
+    fn prepare_spawn_wraps_when_needed() {
+        let (cmd, args) = prepare_spawn("cd /x && claude -r", &[]);
+        assert_eq!(cmd, "zsh");
+        assert_eq!(
+            args,
+            vec!["-lc".to_string(), "cd /x && claude -r".to_string()]
+        );
+    }
+
+    #[test]
+    fn prepare_spawn_passes_through_plain_command() {
+        let args = vec!["-p".to_string(), "hi".to_string()];
+        let (cmd, args2) = prepare_spawn("claude", &args);
+        assert_eq!(cmd, "claude");
+        assert_eq!(args2, args);
     }
 }

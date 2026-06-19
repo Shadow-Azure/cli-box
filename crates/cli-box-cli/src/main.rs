@@ -105,6 +105,37 @@ enum Commands {
         /// Use ScreenCaptureKit to capture the full window frame (requires Screen Recording permission)
         #[arg(long)]
         with_frame: bool,
+
+        /// Scroll the capture window UP N lines from the latest viewport (see older output)
+        #[arg(long, name = "up")]
+        up: Option<u32>,
+
+        /// Jump to the very top of the scrollback
+        #[arg(long)]
+        top: bool,
+    },
+
+    /// Dump the full session text of a CLI/TUI sandbox (clean, ANSI-free)
+    Scrollback {
+        /// Sandbox instance ID
+        #[arg(long)]
+        id: String,
+
+        /// Write to a file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Preserve trailing whitespace (no per-line trim)
+        #[arg(long)]
+        raw: bool,
+
+        /// Start line (1-based, inclusive)
+        #[arg(long)]
+        from_line: Option<u32>,
+
+        /// End line (1-based, inclusive)
+        #[arg(long)]
+        to_line: Option<u32>,
     },
 
     /// List all visible windows on the system
@@ -240,8 +271,19 @@ async fn main() -> anyhow::Result<()> {
             id,
             window_id: _window_id,
             with_frame,
+            up,
+            top,
         } => {
-            cmd_screenshot_daemon(&output, id.as_deref(), with_frame).await?;
+            cmd_screenshot_daemon(&output, id.as_deref(), with_frame, up, top).await?;
+        }
+        Commands::Scrollback {
+            id,
+            output,
+            raw,
+            from_line,
+            to_line,
+        } => {
+            cmd_scrollback(&id, output.as_deref(), raw, from_line, to_line).await?;
         }
         Commands::Windows => {
             cmd_windows()?;
@@ -670,6 +712,8 @@ async fn cmd_screenshot_daemon(
     output: &std::path::Path,
     id: Option<&str>,
     with_frame: bool,
+    up: Option<u32>,
+    top: bool,
 ) -> anyhow::Result<()> {
     let sandbox_id = id.ok_or_else(|| {
         anyhow::anyhow!(
@@ -677,7 +721,7 @@ async fn cmd_screenshot_daemon(
         )
     })?;
 
-    let result = client::daemon_screenshot(sandbox_id, with_frame)
+    let result = client::daemon_screenshot(sandbox_id, with_frame, up, top)
         .await
         .map_err(|e| {
             eprintln!("Error: Failed to connect to daemon: {e}");
@@ -702,6 +746,36 @@ async fn cmd_screenshot_daemon(
         output,
         result.png_data.len()
     );
+    Ok(())
+}
+
+/// Dump the full scrollback of a sandbox via the daemon API.
+async fn cmd_scrollback(
+    id: &str,
+    output: Option<&std::path::Path>,
+    raw: bool,
+    from_line: Option<u32>,
+    to_line: Option<u32>,
+) -> anyhow::Result<()> {
+    let text = client::daemon_scrollback(id, raw, from_line, to_line)
+        .await
+        .map_err(|e| {
+            eprintln!("Error: Failed to fetch scrollback: {e}");
+            e
+        })?;
+    if let Some(path) = output {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {:?}", parent))?;
+            }
+        }
+        std::fs::write(path, &text)
+            .with_context(|| format!("Failed to write scrollback to {:?}", path))?;
+        println!("Scrollback saved to {:?} ({} bytes)", path, text.len());
+    } else {
+        print!("{text}");
+    }
     Ok(())
 }
 
@@ -1248,12 +1322,28 @@ fn mcp_tools() -> serde_json::Value {
             },
             {
                 "name": "screenshot_sandbox",
-                "description": "Take a screenshot of a sandbox (returns base64 PNG). Default: renderer capture (no permission needed). Use with_frame=true for full window capture (requires Screen Recording permission).",
+                "description": "Take a screenshot of a sandbox (returns base64 PNG). Default: renderer capture (no permission needed). Use with_frame=true for full window capture (requires Screen Recording permission). Use up=N to scroll the viewport up N lines, or top=true to jump to the very top of the scrollback.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "sandbox_id": { "type": "string" },
-                        "with_frame": { "type": "boolean", "description": "Use ScreenCaptureKit for full window frame capture (requires Screen Recording permission)", "default": false }
+                        "with_frame": { "type": "boolean", "description": "Use ScreenCaptureKit for full window frame capture (requires Screen Recording permission)", "default": false },
+                        "up": { "type": "integer", "description": "Scroll the viewport UP N lines before capturing (lets you see older output)", "minimum": 0 },
+                        "top": { "type": "boolean", "description": "Jump to the very top of the scrollback before capturing", "default": false }
+                    },
+                    "required": ["sandbox_id"]
+                }
+            },
+            {
+                "name": "scrollback_sandbox",
+                "description": "Dump the full session text of a CLI/TUI sandbox (clean, ANSI-free). Useful for reading everything ever printed. Use from_line/to_line (1-based, inclusive) to slice.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sandbox_id": { "type": "string" },
+                        "raw": { "type": "boolean", "description": "Preserve trailing whitespace (no per-line trim)", "default": false },
+                        "from_line": { "type": "integer", "description": "Start line (1-based, inclusive)", "minimum": 1 },
+                        "to_line": { "type": "integer", "description": "End line (1-based, inclusive)", "minimum": 1 }
                     },
                     "required": ["sandbox_id"]
                 }
@@ -1375,7 +1465,9 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
             "screenshot_sandbox" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");
                 let with_frame = args["with_frame"].as_bool().unwrap_or(false);
-                let result = client::daemon_screenshot(id, with_frame).await?;
+                let up = args["up"].as_u64().map(|n| n as u32);
+                let top = args["top"].as_bool().unwrap_or(false);
+                let result = client::daemon_screenshot(id, with_frame, up, top).await?;
                 let b64 = base64_encode(&result.png_data);
                 let mut response = serde_json::json!({ "sandbox_id": id, "image_base64": b64 });
                 if let Some(ref source) = result.source {
@@ -1385,6 +1477,14 @@ async fn handle_mcp_tool(name: &str, args: &serde_json::Value) -> serde_json::Va
                     response["fallback_reason"] = serde_json::json!(reason);
                 }
                 Ok(response)
+            }
+            "scrollback_sandbox" => {
+                let id = args["sandbox_id"].as_str().unwrap_or("");
+                let raw = args["raw"].as_bool().unwrap_or(false);
+                let from_line = args["from_line"].as_u64().map(|n| n as u32);
+                let to_line = args["to_line"].as_u64().map(|n| n as u32);
+                let text = client::daemon_scrollback(id, raw, from_line, to_line).await?;
+                Ok(serde_json::json!({ "sandbox_id": id, "text": text }))
             }
             "type_text" => {
                 let id = args["sandbox_id"].as_str().unwrap_or("");

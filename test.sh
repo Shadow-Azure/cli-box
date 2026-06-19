@@ -117,6 +117,15 @@ else
   FAILED=1
 fi
 
+# ==================== E2E: Compound Start + Screenshot + Scrollback ========
+info "E2E: compound start + screenshot + scrollback"
+if bash tests/e2e-compound-start-screenshot.sh 2>&1; then
+  ok "E2E compound-start-screenshot passed"
+else
+  err "E2E compound-start-screenshot FAILED"
+  FAILED=1
+fi
+
 # ==================== Rename Remnant Check ====================
 info "Checking for 'sandbox' remnants in user-facing strings..."
 # Check specific files that were renamed for leftover "sandbox" references

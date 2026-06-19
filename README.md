@@ -106,11 +106,15 @@ cli-box start node      # Node.js
 ```bash
 # Sandbox lifecycle
 cli-box start [command]         # Start sandbox (default: zsh)
+cli-box start "cd /app && claude -r"  # Compound commands run via zsh -lc
 cli-box list                    # List active sandboxes
 cli-box close <id>              # Close sandbox
 
 # Screenshot + input
 cli-box screenshot --id <id> -o shot.png
+cli-box screenshot --id <id> --up 100 -o history.png   # Slide window up 100 lines
+cli-box screenshot --id <id> --top -o top.png          # Jump to scrollback top
+cli-box scrollback --id <id>                           # Dump full session text (clean)
 cli-box type --id <id> "hello world"
 cli-box key --id <id> Return
 cli-box click --id <id> 100 200

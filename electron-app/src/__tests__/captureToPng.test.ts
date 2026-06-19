@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MockBufferLine, MockTerminal } from "./mocks/xterm";
+import { renderBufferToPng } from "../renderer/terminalBuffer";
 
 /**
  * captureToPng buffer-fallback rendering logic (extracted from Terminal.tsx).
@@ -63,53 +64,11 @@ function installCanvasMock() {
 }
 
 // ---------------------------------------------------------------------------
-// The rendering logic under test (mirrors Terminal.tsx captureToPng fallback)
+// The rendering logic under test lives in renderer/terminalBuffer.ts
+// (renderBufferToPng). Tests below use the real extracted module — no local
+// duplication. MockTerminal instances are cast to the module's structural
+// RenderableTerminal type via `as any`.
 // ---------------------------------------------------------------------------
-
-function renderBufferToDataUrl(
-  term: MockTerminal,
-  cols: number,
-  rows: number,
-): string | null {
-  const el = term.element;
-  if (el) return null; // primary renderer path, not the fallback
-
-  const fontSize = 13;
-  const lineHeight = Math.ceil(fontSize * 1.4);
-  const charWidth = Math.ceil(fontSize * 0.6);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = cols * charWidth;
-  canvas.height = rows * lineHeight;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // MUST use a dark background — not white
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.font = `${fontSize}px "SF Mono", "Menlo", "Monaco", monospace`;
-  ctx.textBaseline = "top";
-
-  const buffer = term.buffer.active;
-  for (let y = 0; y < rows; y++) {
-    const line = buffer.getLine(y);
-    if (!line) continue;
-    for (let x = 0; x < line.length; x++) {
-      const char = line.getCell(x)?.getChars() || " ";
-      const fg = line.getCell(x)?.getFgColor();
-      if (fg && fg !== 0) {
-        ctx.fillStyle = `rgb(${(fg >> 16) & 0xff},${(fg >> 8) & 0xff},${fg & 0xff})`;
-      } else {
-        ctx.fillStyle = "#cccccc";
-      }
-      ctx.fillText(char, x * charWidth, y * lineHeight);
-    }
-  }
-
-  return canvas.toDataURL("image/png");
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -125,9 +84,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine("hello"),
     ]);
 
-    renderBufferToDataUrl(term, 80, 24);
-
-    // The first fillRect call should be preceded by fillStyle = "#1a1a1a"
+    renderBufferToPng(term as any, 80, 24, 0);
     const fillRectCalls = drawCalls.filter(c => c.method === "fillRect");
     expect(fillRectCalls.length).toBeGreaterThan(0);
 
@@ -141,19 +98,21 @@ describe("captureToPng buffer fallback", () => {
     expect(recordedFillStyles).not.toContain("#fff");
   });
 
-  it("should produce a valid PNG data URL", () => {
+  it("should produce a valid PNG base64 string", () => {
     const term = new MockTerminal([
       new MockBufferLine("test"),
     ]);
 
-    const result = renderBufferToDataUrl(term, 80, 24);
+    const result = renderBufferToPng(term as any, 80, 24, 0);
 
     expect(result).toBeTruthy();
-    expect(result).toMatch(/^data:image\/png;base64,/);
+    // renderBufferToPng returns base64 only (no data: prefix)
+    expect(result).toMatch(/^[A-Za-z0-9+/=]+$/);
   });
 
-  it("should return null when canvas getContext returns null", () => {
-    // Simulate getContext failure
+  it("should throw when canvas getContext returns null", () => {
+    // Simulate getContext failure — the extracted module throws rather than
+    // returning null, surfacing the failure loudly.
     vi.restoreAllMocks();
     vi.spyOn(document, "createElement").mockImplementation((tag: string): any => {
       if (tag === "canvas") {
@@ -168,17 +127,15 @@ describe("captureToPng buffer fallback", () => {
     });
 
     const term = new MockTerminal([new MockBufferLine("test")]);
-    const result = renderBufferToDataUrl(term, 80, 24);
-    expect(result).toBeNull();
+    expect(() => renderBufferToPng(term as any, 80, 24, 0)).toThrow();
   });
 
   it("should handle empty buffer without errors", () => {
     const term = new MockTerminal(); // no lines
 
-    const result = renderBufferToDataUrl(term, 80, 24);
+    const result = renderBufferToPng(term as any, 80, 24, 0);
 
     expect(result).toBeTruthy();
-    expect(result).toMatch(/^data:image\/png;base64,/);
 
     // Should still have the background fillRect
     const fillRectCalls = drawCalls.filter(c => c.method === "fillRect");
@@ -195,7 +152,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine(chineseText),
     ]);
 
-    const result = renderBufferToDataUrl(term, 80, 24);
+    const result = renderBufferToPng(term as any, 80, 24, 0);
 
     expect(result).toBeTruthy();
 
@@ -215,7 +172,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine("X", greenFg),
     ]);
 
-    renderBufferToDataUrl(term, 80, 24);
+    renderBufferToPng(term as any, 80, 24, 0);
 
     // The fillText for the colored character should use the decoded RGB
     expect(recordedFillStyles).toContain("rgb(0,255,0)");
@@ -226,7 +183,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine("A", 0), // fg=0 means default
     ]);
 
-    renderBufferToDataUrl(term, 80, 24);
+    renderBufferToPng(term as any, 80, 24, 0);
 
     // Should use #cccccc for default foreground
     expect(recordedFillStyles).toContain("#cccccc");
@@ -239,7 +196,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine("O", orangeFg),
     ]);
 
-    renderBufferToDataUrl(term, 80, 24);
+    renderBufferToPng(term as any, 80, 24, 0);
 
     expect(recordedFillStyles).toContain("rgb(255,136,0)");
   });
@@ -250,7 +207,7 @@ describe("captureToPng buffer fallback", () => {
       new MockBufferLine("line2"),
     ]);
 
-    const result = renderBufferToDataUrl(term, 80, 24);
+    const result = renderBufferToPng(term as any, 80, 24, 0);
     expect(result).toBeTruthy();
 
     const fillTextCalls = drawCalls.filter(c => c.method === "fillText");
@@ -284,7 +241,7 @@ describe("captureToPng buffer fallback", () => {
       return origCreate(tag);
     });
 
-    renderBufferToDataUrl(term, 40, 12);
+    renderBufferToPng(term as any, 40, 12, 0);
 
     const fontSize = 13;
     const lineHeight = Math.ceil(fontSize * 1.4); // 19

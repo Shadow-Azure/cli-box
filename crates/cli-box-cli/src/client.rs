@@ -155,14 +155,31 @@ pub async fn daemon_list_sandboxes() -> Result<Vec<DaemonSandbox>> {
 
 /// Take a screenshot of a sandbox via the daemon HTTP API.
 /// Returns PNG data along with fallback info from response headers.
-pub async fn daemon_screenshot(sandbox_id: &str, with_frame: bool) -> Result<ScreenshotResult> {
+///
+/// `scroll` scrolls the viewport UP N lines from the latest viewport before
+/// capturing. `top` jumps to the very top of the scrollback. `top` takes
+/// precedence over `scroll` when both are supplied.
+pub async fn daemon_screenshot(
+    sandbox_id: &str,
+    with_frame: bool,
+    scroll: Option<u32>,
+    top: bool,
+) -> Result<ScreenshotResult> {
     let base = daemon_base_url()?;
     let client = reqwest_client();
-    let url = if with_frame {
-        format!("{base}/box/{sandbox_id}/screenshot?with_frame=true")
-    } else {
-        format!("{base}/box/{sandbox_id}/screenshot")
-    };
+    let mut url = format!("{base}/box/{sandbox_id}/screenshot");
+    let mut sep = '?';
+    if with_frame {
+        url.push_str("?with_frame=true");
+        sep = '&';
+    }
+    if top {
+        url.push(sep);
+        url.push_str("top=true");
+    } else if let Some(n) = scroll {
+        url.push(sep);
+        url.push_str(&format!("scroll={n}"));
+    }
     let resp = client
         .get(url)
         .send()
@@ -189,6 +206,47 @@ pub async fn daemon_screenshot(sandbox_id: &str, with_frame: bool) -> Result<Scr
         source,
         fallback_reason,
     })
+}
+
+/// Fetch the full session text for a sandbox via the daemon HTTP API.
+///
+/// When `raw` is true, the server preserves trailing whitespace (no per-line
+/// trim). `from_line`/`to_line` are 1-based inclusive line bounds.
+pub async fn daemon_scrollback(
+    sandbox_id: &str,
+    raw: bool,
+    from_line: Option<u32>,
+    to_line: Option<u32>,
+) -> Result<String> {
+    let base = daemon_base_url()?;
+    let client = reqwest_client();
+    let mut url = format!("{base}/box/{sandbox_id}/scrollback");
+    let mut sep = '?';
+    let mut append = |u: &mut String, kv: &str| {
+        u.push(sep);
+        u.push_str(kv);
+        sep = '&';
+    };
+    if raw {
+        append(&mut url, "raw=true");
+    }
+    if let Some(n) = from_line {
+        append(&mut url, &format!("from_line={n}"));
+    }
+    if let Some(n) = to_line {
+        append(&mut url, &format!("to_line={n}"));
+    }
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| "scrollback request to daemon failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("scrollback failed (HTTP {status}): {text}");
+    }
+    Ok(resp.text().await?)
 }
 
 /// Click in a sandbox via the daemon HTTP API.

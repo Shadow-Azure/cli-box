@@ -1,6 +1,7 @@
-import { test } from "node:test";
+import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -79,4 +80,43 @@ test("installSkillToTargets: writes SKILL.md into each target dir", () => {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+describe("per-target SKILL.md customization", () => {
+  let home;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(os.tmpdir(), "cli-box-skill-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("openclaw body documents /tmp/openclaw screenshot path", () => {
+    const results = installSkillToTargets(["openclaw"], { home });
+    const body = readFileSync(
+      path.join(home, ".openclaw", "skills", "cli-box", "SKILL.md"),
+      "utf8"
+    );
+    assert.ok(results[0].ok, "install should succeed");
+    assert.ok(body.includes("/tmp/openclaw/"), "should mention /tmp/openclaw/");
+    assert.ok(/screenshot.*\/tmp\/openclaw/s.test(body), "should tie screenshots to the path");
+  });
+
+  test("claude body does NOT mention /tmp/openclaw", () => {
+    installSkillToTargets(["claude"], { home });
+    const body = readFileSync(
+      path.join(home, ".claude", "skills", "cli-box", "SKILL.md"),
+      "utf8"
+    );
+    assert.ok(!body.includes("/tmp/openclaw/"), "claude body must stay generic");
+  });
+
+  test("opencode body does NOT mention /tmp/openclaw", () => {
+    installSkillToTargets(["opencode"], { home });
+    const body = readFileSync(
+      path.join(home, ".config", "opencode", "skills", "cli-box", "SKILL.md"),
+      "utf8"
+    );
+    assert.ok(!body.includes("/tmp/openclaw/"), "opencode body must stay generic");
+  });
 });

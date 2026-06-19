@@ -1,5 +1,23 @@
 // crates/cli-box-daemon/src/main.rs
 fn main() {
+    // Handle simple introspection flags before starting the runtime, so the
+    // daemon can be queried like the CLI (`cli-box-daemon --version`).
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("cli-box-daemon {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!(
+            "cli-box-daemon {} — sandbox daemon (managed automatically by cli-box)\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        eprintln!("This binary is normally launched by `cli-box`. Flags:");
+        eprintln!("  -V, --version    Print version and exit");
+        eprintln!("  -h, --help       Print this help and exit");
+        return;
+    }
+
     tracing_subscriber::fmt::init();
 
     let port = cli_box_core::daemon::find_available_port(15801, 15899)

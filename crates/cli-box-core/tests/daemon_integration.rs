@@ -19,6 +19,7 @@ fn empty_state() -> Arc<Mutex<DaemonState>> {
         started_at: std::time::Instant::now(),
         screenshot_ws_tx: None,
         pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
     }))
@@ -50,6 +51,7 @@ fn state_with_sandbox() -> Arc<Mutex<DaemonState>> {
         started_at: std::time::Instant::now(),
         screenshot_ws_tx: None,
         pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
     }))
@@ -217,4 +219,55 @@ async fn readyz_returns_not_ready_without_renderer() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "not_ready");
     assert_eq!(json["renderer_connected"], false);
+}
+
+#[tokio::test]
+async fn screenshot_query_parses_scroll_and_top() {
+    let resp = router_with_sandbox()
+        .oneshot(
+            Request::builder()
+                .uri("/box/test-sb/screenshot?scroll=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "scroll query must be parsed"
+    );
+
+    let resp = router_with_sandbox()
+        .oneshot(
+            Request::builder()
+                .uri("/box/test-sb/screenshot?top=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "top query must be parsed"
+    );
+}
+
+#[tokio::test]
+async fn scrollback_route_exists() {
+    let resp = router_with_sandbox()
+        .oneshot(
+            Request::builder()
+                .uri("/box/test-sb/scrollback")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "scrollback route must exist"
+    );
 }
