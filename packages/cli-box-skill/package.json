@@ -1,6 +1,6 @@
 {
   "name": "cli-box-skill",
-  "version": "0.2.2",
+  "version": "0.2.8",
   "description": "macOS desktop automation sandbox for AI agents",
   "main": "postinstall.mjs",
   "bin": {
@@ -12,8 +12,8 @@
     "test": "node --test"
   },
   "optionalDependencies": {
-    "cli-box-darwin-arm64": "0.2.1",
-    "cli-box-electron-darwin-arm64": "0.2.1"
+    "cli-box-darwin-arm64": "0.2.8",
+    "cli-box-electron-darwin-arm64": "0.2.8"
   },
   "files": [
     "skill/SKILL.md",
