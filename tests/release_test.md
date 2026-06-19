@@ -18,12 +18,12 @@
 11. 执行`sh release.sh`打包编译新的cli-box，然后通过CLI命令，执行下面流程，注意所有`ui-inspect`的输出都放到`release_test/${{yyyy-mm-dd-hh-mm-ss}}`文件夹的txt文件中 ：1. 打开chrome浏览器；2. 输入登录www.google.com；3. 点击搜索框，搜索框填入`github`；4. 回车出发搜索；5. 点击一个搜索结果打开新的网页 ；每一步都适用`cli-box ui-inspect`获取AX树，并校验获取的结果是否符合预期
 12. 执行`sh release.sh`打包编译新的cli-box，然后通过CLI命令，执行下面流程：
   - 后面的每一步操作后都截图保存到release_test/${{时间戳，yyyy-mm-dd-hh-mm-ss}}文件夹下（不要用--with-frame）
-  - `cli-box start "cd /Users/zn-ice/2026/openclaw-main && claude --dangerously-skip-permissions"`，回车确认; 然后输入“执行`pwd`命令”，然后回车发送，发送后等回复完成后使用ui-inspect获取信息存储在目标文件夹的一个txt文件中，然后查看pwd的输出是否为`/Users/zn-ice/2026/openclaw-main`。
+  - `cli-box start "cd /Users/zn-ice/2026/openclaw-main && claude --dangerously-skip-permissions"`，回车确认; 然后输入“执行`pwd`命令”，然后回车发送，发送后等回复完成后使用scrollback获取信息存储在目标文件夹的一个txt文件中，然后查看pwd的输出是否为`/Users/zn-ice/2026/openclaw-main`。
   - 然后输入"请分析 @/Users/zn-ice/2026/openclaw-main 这个代码的实现逻辑，然后将结论告诉我"？然后出发回车发送。发送后等待执行结束，执行结束后进行截图，并校验图片是否处于最后的位置。
   - 然后还是在这个沙箱中，测试`screenshot --up`, `screenshot --top`, `scrollback`的命令，将截图或文本输出保存在目标文件夹路径下，并校验是否正确
 13. 执行`sh release.sh`打包编译新的cli-box，然后通过CLI命令，执行下面流程：
   - 后面的每一步操作后都截图保存到release_test/${{时间戳，yyyy-mm-dd-hh-mm-ss}}文件夹下（不要用--with-frame）
-  - `cli-box start "cd /Users/zn-ice/2026/openclaw-main && opencode"`，回车确认; 然后输入“执行`pwd`命令”，然后回车发送，发送后等回复完成后使用ui-inspect获取信息存储在目标文件夹的一个txt文件中，然后查看pwd的输出是否为`/Users/zn-ice/2026/openclaw-main`。
+  - `cli-box start "cd /Users/zn-ice/2026/openclaw-main && opencode"`，回车确认; 然后输入“执行`pwd`命令”，然后回车发送，发送后等回复完成后使用scrollback获取信息存储在目标文件夹的一个txt文件中，然后查看pwd的输出是否为`/Users/zn-ice/2026/openclaw-main`。
   - 然后输入"请分析 @/Users/zn-ice/2026/openclaw-main 这个代码的实现逻辑，然后将结论告诉我"？然后出发回车发送。实时使用`scrollback`查看当前状态，如果阻塞需要确认，则发送回车进行确认，并进行截图。一直等待执行结束，执行结束后进行截图，并校验图片是否处于最后的位置。
   - 然后还是在这个沙箱中，测试`screenshot --up`, `screenshot --top`, `scrollback`的命令，将截图或文本输出保存在目标文件夹路径下，并校验是否正确
 
