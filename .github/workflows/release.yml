@@ -197,3 +197,14 @@ jobs:
           npm publish ./packages/cli-box-darwin-arm64 --access public
           npm publish ./packages/cli-box-electron-darwin-arm64 --access public
           npm publish ./packages/cli-box-skill --access public
+
+      - name: Commit version changes
+        if: github.event_name == 'release'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/cli-box-darwin-arm64/package.json \
+                  packages/cli-box-electron-darwin-arm64/package.json \
+                  packages/cli-box-skill/package.json
+          git diff --cached --quiet || git commit -m "chore(npm): bump package versions to ${GITHUB_REF_NAME#v}"
+          git push
