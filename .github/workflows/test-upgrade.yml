@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'packages/cli-box-skill/**'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -132,6 +133,70 @@ jobs:
           path: /tmp/upgrade-output.log
           retention-days: 7
 
+  # ==================== 发布模拟验证 ====================
+  publish-sim:
+    name: Publish Simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: npm pack
+        working-directory: packages/cli-box-skill
+        run: |
+          npm pack
+          ls -la cli-box-skill-*.tgz
+
+      - name: 验证 tarball 文件清单
+        working-directory: packages/cli-box-skill
+        run: |
+          TARBALL=$(ls cli-box-skill-*.tgz)
+          echo "=== 验证 $TARBALL ==="
+          tar tzf "$TARBALL" | sort
+
+          # 必须包含的关键文件
+          REQUIRED=("package/postinstall.mjs" "package/installer/cli.mjs" "package/installer/shared.mjs" "package/bin/cli-box-wrapper.js" "package/skill/SKILL.md")
+          for f in "${REQUIRED[@]}"; do
+            if tar tzf "$TARBALL" | grep -q "$f"; then
+              echo "✓ $f"
+            else
+              echo "✗ $f MISSING"
+              exit 1
+            fi
+          done
+          echo ""
+          echo "✅ tarball 文件清单验证通过"
+
+      - name: 验证包结构
+        working-directory: packages/cli-box-skill
+        run: |
+          echo "=== package.json 字段检查 ==="
+          node -e "
+            const pkg = require('./package.json');
+            const checks = [
+              ['name', pkg.name === 'cli-box-skill'],
+              ['bin.cli-box', !!pkg.bin?.['cli-box']],
+              ['bin.cli-box-skill', !!pkg.bin?.['cli-box-skill']],
+              ['files includes postinstall.mjs', pkg.files?.includes('postinstall.mjs')],
+              ['files includes installer/', pkg.files?.some(f => f.startsWith('installer/'))],
+              ['optionalDependencies.cli-box-darwin-arm64', !!pkg.optionalDependencies?.['cli-box-darwin-arm64']],
+            ];
+            let ok = true;
+            for (const [name, pass] of checks) {
+              console.log(pass ? '✓ ' + name : '✗ ' + name);
+              if (!pass) ok = false;
+            }
+            if (!ok) process.exit(1);
+            console.log('\n✅ 包结构验证通过');
+          "
+
   # ==================== 单元测试 ====================
   unit-test:
     name: cli-box-skill Unit Tests
@@ -159,7 +224,7 @@ jobs:
   upgrade-gate:
     name: Upgrade Test Gate
     runs-on: ubuntu-latest
-    needs: [upgrade-test, unit-test]
+    needs: [publish-sim, upgrade-test, unit-test]
     if: always()
 
     steps:
@@ -170,16 +235,18 @@ jobs:
           echo "============================================"
           echo ""
 
+          PUBLISH="${{ needs.publish-sim.result }}"
           UPGRADE="${{ needs.upgrade-test.result }}"
           UNIT="${{ needs.unit-test.result }}"
 
           echo "| 检查项 | 状态 |"
           echo "|-------|------|"
+          echo "| 发布模拟验证 | $PUBLISH |"
           echo "| 升级流程测试 | $UPGRADE |"
           echo "| 单元测试 | $UNIT |"
           echo ""
 
-          if [[ "$UPGRADE" == "success" && "$UNIT" == "success" ]]; then
+          if [[ "$PUBLISH" == "success" && "$UPGRADE" == "success" && "$UNIT" == "success" ]]; then
             echo "✅ 所有升级测试通过！"
             exit 0
           else
