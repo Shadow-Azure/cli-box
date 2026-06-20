@@ -38,7 +38,7 @@ cli-box-skill upgrade
 Upgrade to a specific version:
 
 ```bash
-cli-box-skill upgrade 0.3.0
+cli-box-skill upgrade 0.2.9
 ```
 
 > **Note:** `upgrade` does NOT overwrite your SKILL.md. Use `npx cli-box-skill install`

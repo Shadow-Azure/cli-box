@@ -58,7 +58,7 @@ npx cli-box-skill install claude    # claude | opencode | openclaw | all
 
 ```bash
 cli-box-skill upgrade            # latest
-cli-box-skill upgrade 0.3.0      # specific version
+cli-box-skill upgrade 0.2.9      # specific version
 ```
 
 Stops running sandboxes and daemon before upgrading. Your SKILL.md is preserved.
