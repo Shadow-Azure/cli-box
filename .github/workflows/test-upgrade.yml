@@ -1,0 +1,254 @@
+# cli-box-skill upgrade 命令测试
+# 验证升级流程在隔离环境中正常工作
+#
+# 测试场景:
+# 1. 无 daemon 运行时的升级（CI 环境）
+# 2. npm install 后二进制重新链接
+# 3. SKILL.md 保留验证
+# 4. cli-box-skill 命令可用性
+
+name: Test Upgrade
+
+on:
+  pull_request:
+    paths:
+      - 'packages/cli-box-skill/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==================== 升级流程测试 (macOS) ====================
+  upgrade-test:
+    name: Upgrade Flow Test
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 1. 先安装当前 npm 上的 latest 版本（模拟用户现有环境）
+      - name: 安装当前 latest 版本
+        run: npm install -g cli-box-skill@latest
+
+      - name: 验证 latest 安装
+        run: |
+          echo "=== 验证 cli-box-skill 命令 ==="
+          cli-box-skill --help
+          echo ""
+          echo "=== 验证二进制链接 ==="
+          ls -la ~/.cli-box/bin/cli-box || echo "⚠ cli-box binary not found"
+          ls -la ~/.cli-box/bin/cli-box-daemon || echo "⚠ cli-box-daemon binary not found"
+
+      # 2. 模拟用户自定义 SKILL.md（写入自定义内容）
+      - name: 模拟用户自定义 SKILL.md
+        run: |
+          mkdir -p ~/.claude/skills/cli-box
+          echo "# Custom SKILL.md (user modified)" > ~/.claude/skills/cli-box/SKILL.md
+          echo "Custom content that should be preserved" >> ~/.claude/skills/cli-box/SKILL.md
+          echo ""
+          echo "=== 自定义 SKILL.md 内容 ==="
+          cat ~/.claude/skills/cli-box/SKILL.md
+
+      # 3. 从 PR 分支打包并安装（模拟升级前的包状态）
+      - name: 从 PR 分支打包
+        working-directory: packages/cli-box-skill
+        run: |
+          npm pack
+          ls -la cli-box-skill-*.tgz
+
+      # 4. 运行 upgrade 命令（无 daemon 场景）
+      - name: 运行 upgrade 命令
+        working-directory: packages/cli-box-skill
+        run: |
+          echo "=== 运行 upgrade（无 daemon）==="
+          node installer/cli.mjs upgrade --yes 2>&1 | tee /tmp/upgrade-output.log
+
+      # 5. 验证升级结果
+      - name: 验证升级结果
+        run: |
+          echo "============================================"
+          echo "  升级结果验证"
+          echo "============================================"
+          echo ""
+
+          # 检查二进制是否重新链接
+          echo "=== 二进制链接检查 ==="
+          if [ -L ~/.cli-box/bin/cli-box ]; then
+            echo "✓ cli-box is a symlink"
+            ls -la ~/.cli-box/bin/cli-box
+          else
+            echo "⚠ cli-box is NOT a symlink"
+          fi
+
+          if [ -L ~/.cli-box/bin/cli-box-daemon ]; then
+            echo "✓ cli-box-daemon is a symlink"
+            ls -la ~/.cli-box/bin/cli-box-daemon
+          else
+            echo "⚠ cli-box-daemon is NOT a symlink"
+          fi
+
+          echo ""
+
+          # 检查 SKILL.md 是否保留
+          echo "=== SKILL.md 保留检查 ==="
+          if [ -f ~/.claude/skills/cli-box/SKILL.md ]; then
+            CONTENT=$(cat ~/.claude/skills/cli-box/SKILL.md)
+            if echo "$CONTENT" | grep -q "Custom content that should be preserved"; then
+              echo "✓ SKILL.md preserved (custom content intact)"
+            else
+              echo "✗ SKILL.md was overwritten!"
+              echo "Expected: 'Custom content that should be preserved'"
+              echo "Got:"
+              cat ~/.claude/skills/cli-box/SKILL.md
+              exit 1
+            fi
+          else
+            echo "⚠ SKILL.md not found at ~/.claude/skills/cli-box/SKILL.md"
+          fi
+
+          echo ""
+
+          # 检查 cli-box-skill 命令是否可用
+          echo "=== cli-box-skill 命令检查 ==="
+          cli-box-skill --help 2>&1 | head -5
+
+      - name: 上传升级日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-output
+          path: /tmp/upgrade-output.log
+          retention-days: 7
+
+  # ==================== 发布模拟验证 ====================
+  publish-sim:
+    name: Publish Simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: npm pack
+        working-directory: packages/cli-box-skill
+        run: |
+          npm pack
+          ls -la cli-box-skill-*.tgz
+
+      - name: 验证 tarball 文件清单
+        working-directory: packages/cli-box-skill
+        run: |
+          TARBALL=$(ls cli-box-skill-*.tgz)
+          echo "=== 验证 $TARBALL ==="
+          tar tzf "$TARBALL" | sort
+
+          # 必须包含的关键文件
+          REQUIRED=("package/postinstall.mjs" "package/installer/cli.mjs" "package/installer/shared.mjs" "package/bin/cli-box-wrapper.js" "package/skill/SKILL.md")
+          for f in "${REQUIRED[@]}"; do
+            if tar tzf "$TARBALL" | grep -q "$f"; then
+              echo "✓ $f"
+            else
+              echo "✗ $f MISSING"
+              exit 1
+            fi
+          done
+          echo ""
+          echo "✅ tarball 文件清单验证通过"
+
+      - name: 验证包结构
+        working-directory: packages/cli-box-skill
+        run: |
+          echo "=== package.json 字段检查 ==="
+          node -e "
+            const pkg = require('./package.json');
+            const checks = [
+              ['name', pkg.name === 'cli-box-skill'],
+              ['bin.cli-box', !!pkg.bin?.['cli-box']],
+              ['bin.cli-box-skill', !!pkg.bin?.['cli-box-skill']],
+              ['files includes postinstall.mjs', pkg.files?.includes('postinstall.mjs')],
+              ['files includes installer/', pkg.files?.some(f => f.startsWith('installer/'))],
+              ['optionalDependencies.cli-box-darwin-arm64', !!pkg.optionalDependencies?.['cli-box-darwin-arm64']],
+            ];
+            let ok = true;
+            for (const [name, pass] of checks) {
+              console.log(pass ? '✓ ' + name : '✗ ' + name);
+              if (!pass) ok = false;
+            }
+            if (!ok) process.exit(1);
+            console.log('\n✅ 包结构验证通过');
+          "
+
+  # ==================== 单元测试 ====================
+  unit-test:
+    name: cli-box-skill Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安装依赖
+        working-directory: packages/cli-box-skill
+        run: npm install
+
+      - name: 运行单元测试
+        working-directory: packages/cli-box-skill
+        run: node --test
+
+  # ==================== 门禁结果汇总 ====================
+  upgrade-gate:
+    name: Upgrade Test Gate
+    runs-on: ubuntu-latest
+    needs: [publish-sim, upgrade-test, unit-test]
+    if: always()
+
+    steps:
+      - name: 检查结果
+        run: |
+          echo "============================================"
+          echo "  cli-box-skill 升级测试结果"
+          echo "============================================"
+          echo ""
+
+          PUBLISH="${{ needs.publish-sim.result }}"
+          UPGRADE="${{ needs.upgrade-test.result }}"
+          UNIT="${{ needs.unit-test.result }}"
+
+          echo "| 检查项 | 状态 |"
+          echo "|-------|------|"
+          echo "| 发布模拟验证 | $PUBLISH |"
+          echo "| 升级流程测试 | $UPGRADE |"
+          echo "| 单元测试 | $UNIT |"
+          echo ""
+
+          if [[ "$PUBLISH" == "success" && "$UPGRADE" == "success" && "$UNIT" == "success" ]]; then
+            echo "✅ 所有升级测试通过！"
+            exit 0
+          else
+            echo "❌ 升级测试未通过"
+            exit 1
+          fi

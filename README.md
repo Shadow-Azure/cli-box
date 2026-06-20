@@ -30,6 +30,7 @@
 | **npm** | `npx cli-box-skill install` | Choose harness(es); binaries + skill installed |
 | **Shell** | `bash <(curl -fsSL https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/packages/cli-box-skill/skill/install.sh) claude` | Downloads to `~/.cli-box/bin/`, installs skill |
 | **Manual** | [GitHub Releases](https://github.com/Shadow-Azure/cli-box/releases) | Download and extract manually |
+| **Upgrade** | `cli-box-skill upgrade` | Stops sandboxes, upgrades package, preserves SKILL.md |
 
 ### For Humans
 
@@ -52,6 +53,15 @@ https://raw.githubusercontent.com/Shadow-Azure/cli-box/main/docs/guide/installat
 ```bash
 npx cli-box-skill install claude    # claude | opencode | openclaw | all
 ```
+
+### Upgrade
+
+```bash
+cli-box-skill upgrade            # latest
+cli-box-skill upgrade 0.2.9      # specific version
+```
+
+Stops running sandboxes and daemon before upgrading. Your SKILL.md is preserved.
 
 ### Add to PATH
 

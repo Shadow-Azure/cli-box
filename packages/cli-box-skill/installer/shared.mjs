@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
+import http from "node:http";
 
 const require = createRequire(import.meta.url);
 
@@ -45,6 +46,8 @@ export const HARNESS_TARGETS = {
 };
 
 export const HARNESS_IDS = Object.keys(HARNESS_TARGETS);
+
+const CLI_BOX_DIR = path.join(os.homedir(), ".cli-box");
 
 // Accepts an array of tokens or a comma/space-separated string.
 // Returns the resolved list of harness ids. Throws on unknown tokens.
@@ -177,4 +180,156 @@ export function ensureBinaries({ home = os.homedir() } = {}) {
     }
   }
   return { ok: true, linked, binDir };
+}
+
+// ── Upgrade helpers ────────────────────────────────────────────────────────
+
+/** Read ~/.cli-box/daemon.json. Returns {port, pid, started_at} or null. */
+export function readDaemonInfo() {
+  const p = path.join(CLI_BOX_DIR, "daemon.json");
+  if (!safeExists(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Read ~/.cli-box/electron.json. Returns {pid} or null. */
+export function readElectronInfo() {
+  const p = path.join(CLI_BOX_DIR, "electron.json");
+  if (!safeExists(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Check if a process with the given PID is alive. */
+export function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** HTTP GET to localhost:{port}{urlPath}. Returns parsed JSON. */
+export function httpGet(port, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`http://127.0.0.1:${port}${urlPath}`, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          resolve(body);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(5000, () => {
+      req.destroy();
+      reject(new Error("Request timeout"));
+    });
+  });
+}
+
+/** HTTP POST to localhost:{port}{urlPath}. Returns parsed JSON. */
+export function httpPost(port, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      `http://127.0.0.1:${port}${urlPath}`,
+      { method: "POST" },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(body);
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(5000, () => {
+      req.destroy();
+      reject(new Error("Request timeout"));
+    });
+    req.end();
+  });
+}
+
+/** List running sandboxes from the daemon. Returns array of sandbox objects. */
+export async function listRunningSandboxes(port) {
+  try {
+    const data = await httpGet(port, "/instances");
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Close a single sandbox by ID. Returns true on success. */
+export async function closeSandbox(port, id) {
+  try {
+    await httpPost(port, `/box/${id}/close`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Send shutdown signal to the daemon. */
+export async function shutdownDaemon(port) {
+  try {
+    await httpPost(port, "/shutdown");
+  } catch {
+    // Daemon may already be shutting down
+  }
+}
+
+/** Kill Electron process if running. Removes electron.json. */
+export function killElectron() {
+  const info = readElectronInfo();
+  if (!info || !info.pid) return;
+  if (!isProcessAlive(info.pid)) {
+    // Clean up stale file
+    try { fs.unlinkSync(path.join(CLI_BOX_DIR, "electron.json")); } catch {}
+    return;
+  }
+  try {
+    process.kill(info.pid, "SIGTERM");
+    // Wait briefly for graceful shutdown
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && isProcessAlive(info.pid)) {
+      execSync("sleep 0.2");
+    }
+    if (isProcessAlive(info.pid)) {
+      process.kill(info.pid, "SIGKILL");
+    }
+  } catch {
+    // Permission error or already dead
+  }
+  try { fs.unlinkSync(path.join(CLI_BOX_DIR, "electron.json")); } catch {}
+}
+
+/** Poll until a process exits. Returns true if it exited, false on timeout. */
+export function waitForProcessExit(pid, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    execSync("sleep 0.3");
+  }
+  return false;
+}
+
+/** Run npm install -g <pkg>. Throws on failure. */
+export function npmInstall(pkg) {
+  execSync(`npm install -g ${pkg}`, { stdio: "inherit" });
 }

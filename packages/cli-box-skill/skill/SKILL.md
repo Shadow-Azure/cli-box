@@ -27,6 +27,23 @@ Choose Claude Code, OpenCode, and/or OpenClaw. Or non-interactively:
 npx cli-box-skill install claude   # claude | opencode | openclaw | all
 ```
 
+## Upgrade
+
+Upgrade to the latest version (stops running sandboxes first):
+
+```bash
+cli-box-skill upgrade
+```
+
+Upgrade to a specific version:
+
+```bash
+cli-box-skill upgrade 0.2.9
+```
+
+> **Note:** `upgrade` does NOT overwrite your SKILL.md. Use `npx cli-box-skill install`
+> if you want to reset SKILL.md to the bundled version.
+
 ## Quick Start
 
 ```bash
