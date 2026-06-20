@@ -13,7 +13,6 @@ on:
   pull_request:
     paths:
       - 'packages/cli-box-skill/**'
-  workflow_call:
   workflow_dispatch:
 
 permissions:
