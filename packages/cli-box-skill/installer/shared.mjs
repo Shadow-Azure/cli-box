@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { execSync } from "node:child_process";
 import http from "node:http";
 
 const require = createRequire(import.meta.url);
