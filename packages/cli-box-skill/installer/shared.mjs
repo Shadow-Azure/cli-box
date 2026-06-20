@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -114,6 +115,27 @@ export function installSkillToTargets(ids, { home = os.homedir(), content } = {}
 
 // Symlinks the platform-package binaries into ~/.cli-box/bin.
 // Never throws: returns { ok:false, reason } if the platform package is absent.
+// Try to install a platform package from the official npmjs.org registry.
+// This is a fallback when the user's configured registry (e.g., npmmirror)
+// doesn't have the required version due to mirror sync lag.
+function tryInstallFromOfficialRegistry(pkgName) {
+  try {
+    // Read the expected version from this package's optionalDependencies
+    const selfPkg = require.resolve("../package.json");
+    const { optionalDependencies } = JSON.parse(fs.readFileSync(selfPkg, "utf8"));
+    const version = optionalDependencies?.[pkgName];
+    if (!version) return false;
+
+    execSync(
+      `npm install ${pkgName}@${version} --registry=https://registry.npmjs.org --no-save`,
+      { stdio: "ignore", timeout: 60_000 }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ensureBinaries({ home = os.homedir() } = {}) {
   const binDir = path.join(home, ".cli-box", "bin");
   fs.mkdirSync(binDir, { recursive: true });
@@ -127,7 +149,16 @@ export function ensureBinaries({ home = os.homedir() } = {}) {
   try {
     pkgDir = path.dirname(require.resolve(`${pkgName}/package.json`));
   } catch {
-    return { ok: false, reason: `platform package ${pkgName} not found`, binDir };
+    // Fallback: try installing from the official npmjs.org registry
+    if (tryInstallFromOfficialRegistry(pkgName)) {
+      try {
+        pkgDir = path.dirname(require.resolve(`${pkgName}/package.json`));
+      } catch {
+        return { ok: false, reason: `platform package ${pkgName} not found (fallback failed)`, binDir };
+      }
+    } else {
+      return { ok: false, reason: `platform package ${pkgName} not found`, binDir };
+    }
   }
 
   const linked = [];
