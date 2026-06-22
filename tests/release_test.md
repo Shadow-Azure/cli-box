@@ -28,3 +28,9 @@
   - 然后还是在这个沙箱中，测试`screenshot --up`, `screenshot --top`, `scrollback`的命令，将截图或文本输出保存在目标文件夹路径下，并校验是否正确
 
 在release_test/${{时间戳，yyyy-mm-dd-hh-mm-ss}}文件夹下，生成markdown的最终测试报告
+14. 执行`sh release.sh`打包编译新的cli-box，然后通过CLI命令，执行下面流程，验证 `screenshot` 在捕获前会先触发 PTY resize + 重绘稳定（pre-resize 机制），确保全屏 TUI 在窗口尺寸变化后截图布局仍然正确：
+  - 后面的每一步操作后都截图保存到`release_test/${{时间戳，yyyy-mm-dd-hh-mm-ss}}`文件夹下（不要用--with-frame）
+  - `cli-box start claude --shell`（或任意全屏 TUI 如 `htop`），等待 TUI 完全渲染完成后，执行 `cli-box screenshot <id> --out baseline.png` 进行基线截图，校验布局完整（header / 输入框位置正确）
+  - 然后拖拽 Electron 窗口改变其尺寸（不同大小），等待约 1 秒后执行 `cli-box screenshot <id> --out after-resize.png`，校验布局已按新尺寸正确重排——无重叠/乱码文字，无残留的半帧重绘
+  - 再次改变窗口尺寸（又一个不同尺寸），立即执行 `cli-box screenshot <id> --out immediate.png`（不手动等待），校验布局仍然正确（验证 redraw-settle 已处理新帧）
+  - 通过标准：三张截图中的 TUI 布局均与当前窗口尺寸一致、布局正确；如果截图显示 resize 后 TUI 布局错乱，则说明 pre-resize 机制发生回归
