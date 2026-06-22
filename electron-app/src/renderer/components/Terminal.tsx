@@ -4,6 +4,7 @@ import type { Terminal as TerminalType } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { connectPty } from "../api";
 import { renderBufferToPng } from "../terminalBuffer";
+import { captureWithResizeSettle } from "../screenshotSync";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalProps {
@@ -26,6 +27,7 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
   const fitAddonRef = useRef<FitAddon | null>(null);
   const fitFnRef = useRef<(() => void) | null>(null);
   const connRef = useRef<ReturnType<typeof connectPty> | null>(null);
+  const lastOutputAtRef = useRef(0);
 
   useImperativeHandle(ref, () => ({
     get terminal() {
@@ -34,20 +36,40 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
     async captureToPng(scrollOffset: number = 0): Promise<string> {
       const term = xtermRef.current;
       if (!term) throw new Error("Terminal not initialized");
+      const fitAddon = fitAddonRef.current;
+      const conn = connRef.current;
 
-      // The live xterm canvas only ever shows the current viewport (offset 0).
-      // For any scroll offset we must render from the text buffer instead.
-      if (scrollOffset === 0) {
-        const canvasEl = term.element?.querySelector("canvas");
-        if (canvasEl) {
-          const dataUrl = canvasEl.toDataURL("image/png");
-          return dataUrl.split(",")[1];
+      // Before mount fully settles (no fit/conn yet): fall back to a direct
+      // read without resize, matching prior behavior.
+      if (!fitAddon || !conn) {
+        if (scrollOffset === 0) {
+          const canvasEl = term.element?.querySelector("canvas");
+          if (canvasEl) return canvasEl.toDataURL("image/png").split(",")[1];
         }
+        return renderBufferToPng(term, term.cols, term.rows, scrollOffset);
       }
 
-      const fitAddon = fitAddonRef.current;
-      if (fitAddon) fitAddon.fit();
-      return renderBufferToPng(term, term.cols, term.rows, scrollOffset);
+      return captureWithResizeSettle(
+        {
+          now: () => performance.now(),
+          getLastOutputAt: () => lastOutputAtRef.current,
+          sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+          cols: () => term.cols,
+          rows: () => term.rows,
+          fit: () => fitAddon.fit(),
+          resize: (cols, rows) => conn.resize(cols, rows),
+          awaitFrame: () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+            ),
+          readViewportCanvas: () => {
+            const canvasEl = term.element?.querySelector("canvas");
+            return canvasEl ? canvasEl.toDataURL("image/png").split(",")[1] : null;
+          },
+          renderScrollback: (offset) => renderBufferToPng(term, term.cols, term.rows, offset),
+        },
+        scrollOffset,
+      );
     },
   }), []);
 
@@ -145,6 +167,7 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
     conn.onOutput((data) => {
       const term = xtermRef.current;
       if (!term) return;
+      lastOutputAtRef.current = performance.now();
       const writeData = typeof data === "string" ? data : decoder.decode(data as Uint8Array);
       term.write(writeData);
     });
