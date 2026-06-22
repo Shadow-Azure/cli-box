@@ -146,6 +146,7 @@ describe("captureWithResizeSettle", () => {
     // waited time proves the loop honoured the default timeout when no output.
     let waited = 0;
     const { deps } = makeSettlingDeps({
+      now: () => waited, // clock must advance with the waited counter
       getLastOutputAt: () => 0, // no new output → must hit 500ms timeout
       sleep: async (ms: number) => {
         waited += ms;
