@@ -9,7 +9,7 @@ title: AI Agent + OpenClaw + 飞书实战工作流
 ## 一、整体架构
 
 ```
-棠磊（飞书）
+用户（飞书）
     ↓ 消息
 OpenClaw（飞书 DM channel）
     ↓ 调度
