@@ -50,3 +50,53 @@ export async function waitForRedrawSettle(
     if (now - start >= timeoutMs) return "timeout";
   }
 }
+
+/** Injectable terminal/PTY/canvas operations the orchestrator needs. */
+export interface CaptureDeps extends SettleClock {
+  cols(): number;
+  rows(): number;
+  /** Recompute cols/rows from the current DOM (xterm FitAddon.fit). */
+  fit(): void;
+  /** Push new cols/rows to the PTY (WS resize → SIGWINCH). */
+  resize(cols: number, rows: number): void;
+  /** Wait for the renderer to commit the latest buffer to the canvas (rAF). */
+  awaitFrame(): Promise<void>;
+  /** Read the viewport canvas as base64 PNG (no data: prefix), or null if absent. */
+  readViewportCanvas(): string | null;
+  /** Render the scrollback at `scrollOffset` lines up as base64 PNG. */
+  renderScrollback(scrollOffset: number): string;
+}
+
+export interface CaptureOptions {
+  quietMs: number;
+  timeoutMs: number;
+}
+
+/**
+ * Fit → resize → wait for redraw settle → wait one frame → capture.
+ *
+ * Guarantees `resize()` runs strictly before any canvas/buffer read, so the
+ * PTY has been told the current size (and the TUI given a chance to reflow)
+ * before we snapshot pixels.
+ *
+ * For `scrollOffset === 0` the live viewport canvas is preferred; if it is
+ * unavailable we fall back to buffer rendering. Non-zero offsets always render
+ * from the buffer.
+ */
+export async function captureWithResizeSettle(
+  deps: CaptureDeps,
+  scrollOffset: number,
+  opts: CaptureOptions = { quietMs: DEFAULT_QUIESCENCE_MS, timeoutMs: DEFAULT_RESIZE_TIMEOUT_MS },
+): Promise<string> {
+  deps.fit();
+  const baseline = deps.now();
+  deps.resize(deps.cols(), deps.rows());
+  await waitForRedrawSettle(deps, baseline, opts.quietMs, opts.timeoutMs);
+  await deps.awaitFrame();
+
+  if (scrollOffset === 0) {
+    const canvas = deps.readViewportCanvas();
+    if (canvas !== null) return canvas;
+  }
+  return deps.renderScrollback(scrollOffset);
+}
