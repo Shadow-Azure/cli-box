@@ -3,17 +3,20 @@
  *
  * Before capturing a terminal frame we re-sync the terminal's cols/rows to the
  * DOM (fit), push that size to the PTY (resize → SIGWINCH), then wait for the
- * TUI to finish redrawing. "Redraw done" is approximated by watching PTY output
- * settle (no new output for `quietMs`), capped by `timeoutMs`.
+ * resize-induced redraw burst to land (probe / quiet / bounded cap).
  *
  * Time sources are injected (SettleClock) so the logic is fully deterministic
  * under test without relying on vitest fake-timer mocking of performance.now().
  */
 
-/** Default quiescence window: output quiet for this long ⇒ redraw finished. */
+/** Default quiescence window: output quiet for this long ⇒ redraw burst landed. */
 export const DEFAULT_QUIESCENCE_MS = 30;
-/** Default hard cap: give up waiting and capture whatever we have. */
-export const DEFAULT_RESIZE_TIMEOUT_MS = 500;
+/** No-output probe window: if no PTY output arrives this long after the resize,
+ *  there is no SIGWINCH/redraw to wait for (steady state) — capture immediately. */
+export const PROBE_MS = 50;
+/** Default hard cap: give up waiting and capture whatever we have. Bounded so
+ *  continuous output (spinner / streaming) can't stall a screenshot. */
+export const DEFAULT_RESIZE_TIMEOUT_MS = 120;
 
 /** Injectable monotonic clock + last-output-at probe + async sleep. */
 export interface SettleClock {
@@ -26,11 +29,18 @@ export interface SettleClock {
 }
 
 /**
- * Wait until PTY output has gone quiet for `quietMs` after `baseline`
- * (evidence the TUI reacted to the SIGWINCH and finished its redraw burst),
- * or until `timeoutMs` elapses — whichever comes first.
+ * Wait for the resize-induced redraw burst to land, bounded so continuous output
+ * can't stall the capture. Three exit conditions, cheapest first:
  *
- * @returns "settled" if output quieted within the timeout, else "timeout".
+ *  1. Probe (`probeMs`): if NO PTY output has arrived since `baseline`, there was
+ *     no SIGWINCH/redraw (TIOCSWINSZ only signals on a real size change) — return
+ *     "settled" immediately. Skips the wait entirely in steady state.
+ *  2. Quiet (`quietMs`): once output HAS arrived, return "settled" once it goes
+ *     quiet — short reflows exit early without paying the full cap.
+ *  3. Cap (`timeoutMs`): continuous output never quiets — return "timeout" at the
+ *     cap regardless.
+ *
+ * @returns "settled" (probe or quiet) or "timeout" (cap).
  */
 export async function waitForRedrawSettle(
   clock: SettleClock,
@@ -38,6 +48,7 @@ export async function waitForRedrawSettle(
   quietMs: number,
   timeoutMs: number,
   tickMs: number = 10,
+  probeMs: number = PROBE_MS,
 ): Promise<"settled" | "timeout"> {
   const start = clock.now();
   for (;;) {
@@ -46,7 +57,11 @@ export async function waitForRedrawSettle(
     const lastOutputAt = clock.getLastOutputAt();
     const sawNewOutput = lastOutputAt > baseline;
     const quiet = now - lastOutputAt >= quietMs;
+    // 1. Steady state: no reflow to wait for.
+    if (!sawNewOutput && now - start >= probeMs) return "settled";
+    // 2. Redraw burst landed and went quiet.
     if (sawNewOutput && quiet) return "settled";
+    // 3. Bounded cap (continuous output).
     if (now - start >= timeoutMs) return "timeout";
   }
 }
