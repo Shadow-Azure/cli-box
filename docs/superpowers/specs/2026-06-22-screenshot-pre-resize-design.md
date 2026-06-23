@@ -2,7 +2,18 @@
 
 **Date:** 2026-06-22
 **Branch:** feat/screenshot-pre-resize
-**Status:** Approved
+**Status:** Approved (revised 2026-06-23 — settle changed from global-quiet ≤500ms to bounded burst-wait ≤120ms; see Revision Notes)
+
+---
+
+## Revision Notes (2026-06-23)
+
+The release test (scenario 14: layout after window resize) revealed two flaws in the original settle design, both corrected in this revision:
+
+1. **The settle waited for *global* output quiet (≤500ms cap).** Under continuous output (spinner / streaming TUI), output never quiets → every screenshot hit the 500ms cap. And in steady state (size unchanged), the settle waited the full 500ms for output that never arrives. Both coupled with the daemon's renderer-screenshot timeout.
+2. **The "always resize triggers a redraw" rationale was wrong for unchanged size.** `ioctl(TIOCSWINSZ)` only sends SIGWINCH when the size actually changes (the kernel compares old vs new). Same-size resize → no signal → no redraw. So "always resize" does NOT double as a canvas refresh on unchanged size.
+
+The revised settle (below) is a **bounded burst-wait**: a no-output probe (skip the wait in steady state), an early-exit when the reflow burst quiets (short reflows don't pay the full cap), and a 120ms hard cap (continuous output can no longer cause long waits). Max added latency ≤120ms, which also **removes the dependency on the (never-merged) 10s daemon timeout** — see Risks.
 
 ---
 
@@ -22,36 +33,9 @@ cli-box screenshot → daemon screenshot_handler
   → Electron renderer captureToPng(scroll) → 返回 PNG
 ```
 
-### 渲染端入口（现状）`electron-app/src/renderer/components/Terminal.tsx:34-51`
+### 渲染端入口（现状）`electron-app/src/renderer/components/Terminal.tsx`
 
-```tsx
-async captureToPng(scrollOffset: number = 0): Promise<string> {
-  const term = xtermRef.current;
-  if (!term) throw new Error("Terminal not initialized");
-  if (scrollOffset === 0) {
-    // 视口路径：直接读 canvas，没有任何 resize / relayout
-    const canvasEl = term.element?.querySelector("canvas");
-    if (canvasEl) {
-      const dataUrl = canvasEl.toDataURL("image/png");
-      return dataUrl.split(",")[1];
-    }
-  }
-  // scrollback 路径：只有本地 fit()，没有 conn.resize()，TUI 收不到 SIGWINCH
-  const fitAddon = fitAddonRef.current;
-  if (fitAddon) fitAddon.fit();
-  return renderBufferToPng(term, term.cols, term.rows, scrollOffset);
-}
-```
-
-### 三个缺口
-
-1. **视口截图（`scroll=0`，claude 全屏 TUI 常见场景）**：直接 `canvas.toDataURL()`，零 resize。xterm 的 cols/rows 与 PTY 实际尺寸漂移、或 TUI 处于半重绘状态时，canvas 上就是错乱布局。
-2. **scrollback 截图**：只 `fitAddon.fit()`（仅本地重算），无 `conn.resize()` → TUI 不 reflow。
-3. 真正会发 PTY resize 的 `doFit()`（`Terminal.tsx:115-118`）只在 mount / window resize / container ref 触发，不在截图路径上。
-
-### 为何复发
-
-截图子系统被多次重写（2026-06-05 frame、2026-06-06 size-fix、2026-06-17 start-shell-screenshot）。2026-06-18 reliability fix（commit `17517c2`）只处理超时 / 窗口识别 / 重连，未覆盖截图前 resize。「视口路径直接读 canvas」的写法在这些迭代中引入，丢掉了 resize 逻辑。
+视口路径（`scroll=0`）直接 `canvas.toDataURL()`，零 resize；scrollback 路径只有本地 `fit()`，无 `conn.resize()`。xterm 的 cols/rows 与 PTY 实际尺寸漂移、或 TUI 处于半重绘状态时，canvas 上就是错乱布局。真正会发 PTY resize 的 `doFit()` 只在 mount / window resize / container ref 触发，不在截图路径上。
 
 ---
 
@@ -59,130 +43,97 @@ async captureToPng(scrollOffset: number = 0): Promise<string> {
 
 ### Approach: renderer-side fix in `captureToPng`
 
-| 方案 | 做法 | 取舍 |
-|------|------|------|
-| **1（采纳）渲染端 `captureToPng` 内修复** | 截图入口统一 fit + resize + settle | 改动最小、落在真实截图点、viewport + scrollback 双路一次性覆盖 |
-| 2 daemon 截图前发 resize_request | 跨进程通知渲染端 resize 再 capture | 逻辑跨进程散开、要把 resize 编排进 WS 协议、复杂度高 |
-| 3 后台周期 resync | 心搏定时 fit + resize | 不保证截图那一瞬间 canvas 是 fresh 的，治标不治本 |
+截图本质是渲染端行为，resize（xterm + PTY WS）也在渲染端，在最贴近截图点修最干净。新逻辑抽成纯的、依赖注入的 `electron-app/src/renderer/screenshotSync.ts`（仿 `terminalBuffer.ts` 先例，无需 React/xterm/fake-timer 即可单测）。
 
-截图本质是渲染端行为，resize（xterm + PTY WS）也在渲染端，在最贴近截图点修最干净。
+### Mechanism: fit → conn.resize → 有界等重绘爆发（probe + 安静早退 + 120ms 上限）
 
-### Mechanism: fit → conn.resize → 等 redraw settle（事件驱动 + 超时兜底）
+**核心约束**：「resize 后的正确新布局」只存在于重绘输出被渲染端 `term.write()` 消费完之后。所以等待不可省——但**只需等那一次性重排爆发落地**，不等「全局输出停下」。
 
-**核心洞察**：无法直接观测 TUI 内部状态，但 TUI 收到 SIGWINCH 后重绘必然产生 PTY 输出回流渲染端。因此「重绘完成」≈「resize 之后那波输出安静下来」。
+**关于 SIGWINCH（纠正）**：`ioctl(TIOCSWINSZ)` 只在尺寸**真正变化**时才向前台进程组发 SIGWINCH；同尺寸 resize 不发信号、不触发重绘。因此：
+- `conn.resize(cols, rows)` **照发**——目的是修 PTY 漂移（把 PTY 强制对齐 xterm 当前尺寸），不是为了在稳态触发重绘。
+- 「有没有重排要等」由 settle 的**无输出探测**判定：探测窗口内没有任何新 PTY 输出 → 说明没有 SIGWINCH/重排（稳态）→ 立即截，不等。
 
-#### 实现（`electron-app/src/renderer/components/Terminal.tsx`）
+#### 关键逻辑（`electron-app/src/renderer/screenshotSync.ts`）
 
-**Step 1 — 在现有 `conn.onOutput` 回调（Terminal.tsx:145）追加时间戳：**
+```ts
+export const DEFAULT_QUIESCENCE_MS = 30;     // 重排爆发安静的判据（早退用）
+export const PROBE_MS = 50;                   // 无输出探测窗口：稳态直接截
+export const DEFAULT_RESIZE_TIMEOUT_MS = 120; // 有界爆发上限（原 500 → 120）
 
-```tsx
-conn.onOutput((data) => {
-  const term = xtermRef.current;
-  if (!term) return;
-  lastOutputAtRef.current = performance.now();   // ← 新增
-  const writeData = typeof data === "string" ? data : decoder.decode(data as Uint8Array);
-  term.write(writeData);
-});
-```
-
-**Step 2 — 新增常量与 helper：**
-
-```tsx
-const SYNC_RESIZE_TIMEOUT_MS = 500;    // 超时兜底：到点直接截
-const OUTPUT_QUIESCENCE_MS = 30;       // 输出停顿 ≥30ms 视为这波重绘完成
-
-// fit 到当前 DOM 尺寸 + 同步给 PTY（触发 SIGWINCH）+ 等重绘稳定
-const syncResizeAndSettle = async () => {
-  const term = xtermRef.current;
-  const fitAddon = fitAddonRef.current;
-  const conn = connRef.current;
-  if (!term || !fitAddon || !conn) return;
-  fitAddon.fit();
-  const baseline = performance.now();          // 记录发 resize 的时刻
-  conn.resize(term.cols, term.rows);           // → SIGWINCH → TUI 重绘 → 输出回流
-  await waitForRedrawSettle(baseline, OUTPUT_QUIESCENCE_MS, SYNC_RESIZE_TIMEOUT_MS);
-  await nextFrame();                           // 让 xterm 把最新 buffer 提交到 canvas（2×rAF）
-};
-
-// 阻塞：等到「resize 后有新输出 且 安静 30ms」，或 500ms 超时
-async function waitForRedrawSettle(baseline: number, quietMs: number, timeoutMs: number) {
-  const start = performance.now();
-  while (true) {
-    await tick(10);                            // rAF 或 10ms 步进
-    const now = performance.now();
-    const sawNewOutput = lastOutputAtRef.current > baseline;  // resize 后有新输出
-    const quiet = now - lastOutputAtRef.current >= quietMs;   // 这波输出停了
-    if ((sawNewOutput && quiet) || now - start >= timeoutMs) break;
+// 等待 resize 引发的重排爆发落地。三段判据，全部有界：
+export async function waitForRedrawSettle(
+  clock: SettleClock, baseline: number,
+  quietMs = DEFAULT_QUIESCENCE_MS,
+  timeoutMs = DEFAULT_RESIZE_TIMEOUT_MS,
+  probeMs = PROBE_MS, tickMs = 10,
+): Promise<"settled" | "timeout"> {
+  const start = clock.now();
+  for (;;) {
+    await clock.sleep(tickMs);
+    const now = clock.now();
+    const lastOutputAt = clock.getLastOutputAt();
+    const sawOutput = lastOutputAt > baseline;
+    // ① 稳态：探测窗口内一直无新输出 → 没有重排 → 立刻返回（不干等）
+    if (!sawOutput && now - start >= probeMs) return "settled";
+    // ② 爆发已落地：看到输出且安静了 quietMs → 早退（短重排不必等满）
+    if (sawOutput && now - lastOutputAt >= quietMs) return "settled";
+    // ③ 有界上限：持续输出永不安静 → timeoutMs 到点返回（不再退化）
+    if (now - start >= timeoutMs) return "timeout";
   }
 }
 ```
 
-**Step 3 — `captureToPng` 入口统一调用（覆盖 viewport + scrollback）：**
-
-```tsx
-async captureToPng(scrollOffset: number = 0): Promise<string> {
-  const term = xtermRef.current;
-  if (!term) throw new Error("Terminal not initialized");
-  await syncResizeAndSettle();                 // ← 新增：截图前 resize + 等稳定
-  if (scrollOffset === 0) {
-    const canvasEl = term.element?.querySelector("canvas");
-    if (canvasEl) {
-      const dataUrl = canvasEl.toDataURL("image/png");
-      return dataUrl.split(",")[1];
-    }
-  }
-  return renderBufferToPng(term, term.cols, term.rows, scrollOffset);
-}
-```
-
-**Step 4 — `doFit`（Terminal.tsx:115-118）复用相同 fit+resize**（去掉 settle），消除重复，保持单一来源。
+`captureWithResizeSettle(deps, scrollOffset)`：`fit → baseline=now → resize → waitForRedrawSettle → awaitFrame(2×rAF) → capture`，保证 `resize()` 在任何 canvas/buffer 读取之前。`Terminal.tsx` 的 `captureToPng` 委托给它；`onOutput` 追加 `lastOutputAtRef.current = performance.now()` 喂给 settle 时钟。
 
 ### 为什么「总是发 resize」而非「尺寸变了才发」
 
-PTY 尺寸漂移时，xterm 的 cols 不变（DOM 没变），若只在 cols 变化时才 resize 会漏掉漂移场景。**总是发 `conn.resize(cols, rows)`**：daemon 侧 `resize_pty` 幂等，且同尺寸 SIGWINCH 也会触发全屏 TUI 重绘——顺带解决「canvas 是旧帧」的 stale 问题，等于免费做一次强制刷新。
+为了修 PTY 漂移：PTY 与 xterm 尺寸不一致时，xterm 的 cols 跟着 DOM、不会变，若只在 cols 变化时才 resize 会漏掉漂移。**总是发 `conn.resize(cols, rows)`** 把 PTY 强制对齐 xterm 当前尺寸。注意：同尺寸时内核不发 SIGWINCH、不会重绘——「有没有重排要等」交给 settle 的无输出探测判定，而不是依赖 resize 去触发重绘。
 
-### 行为对照（事件驱动 + 超时兜底）
+### 行为对照（有界爆发等待，全部 ≤120ms）
 
-| 场景 | 表现 |
-|------|------|
-| heavy TUI 收到 SIGWINCH 重绘 | 输出回流 → 安静 30ms → **快路径，几十 ms 就截** |
-| 同尺寸 SIGWINCH / TUI 无反应 | 无新输出 → **500ms 超时兜底，直接截** |
-| TUI 持续输出（spinner） | 永不安静 → **500ms 超时兜底截** |
+| 场景 | 命中分支 | 表现 |
+|------|---------|------|
+| 稳态（尺寸没变、无重排） | ① 探测无输出 | **~50ms 后立即截** |
+| 短重排（重画完即安静） | ② 爆发落地 + 安静 | **~60–90ms 早退** |
+| 持续输出（spinner / 流式） | ③ 永不安静 → 120ms 上限 | **~120ms（不再退化到 500ms）** |
 
 ---
 
 ## Scope
 
 - **In scope**：默认渲染端截图（viewport + scrollback，CLI sandbox 如 claude）。
-- **Out of scope（follow-up）**：`--with-frame`（ScreenCaptureKit 直捕窗口）绕过渲染端，要 resize 需跨进程编排，复杂度高；claude 问题在默认路径，本次不扩面。
+- **Out of scope（follow-up）**：`--with-frame`（ScreenCaptureKit 直捕窗口）绕过渲染端，要 resize 需跨进程编排；本次不扩面。
 
 ---
 
 ## Testing Strategy
 
-### UT（vitest）— 回归看护（最重要）
+### UT（vitest，`screenshotSync.test.ts`）— 回归看护
 
-mock xterm + conn（参考 `electron-app/src/__tests__/connectPty.test.ts`）：
+依赖注入 fake clock，断言真实时序行为：
 
-- **快路径**：`captureToPng(0)` 后用 fake timer 推进，resize 后触发一次 onOutput 再推进 30ms，断言 `toDataURL` 在 settle 之后才被调用。
-- **超时兜底**：mock conn 不回放任何输出，推进 500ms，断言仍完成截图（兜底生效）。
-- **顺序守卫**：断言 `conn.resize` 在 canvas/buffer 读取之前被调用——这正是当初被回退掉机制的回归守卫。
+- **稳态（probe）**：resize 后不回放任何输出，推进 ~50ms，断言立即完成截图（`settled`，不等到 120ms）。
+- **短重排早退**：resize 后触发一次 onOutput，推进 >30ms 安静，断言 ~60–90ms 内完成。
+- **持续输出有界**：resize 后持续回放输出（永不安静），推进到 120ms，断言到点完成（不再等 500ms）。
+- **顺序守卫**：断言 `conn.resize` 在 canvas/buffer 读取之前被调用——这是当初被回退机制的回归守卫。
+- 其余 `captureWithResizeSettle` 测试（viewport canvas / scrollback / null-canvas fallback / order-guard）保持。
 
 ### E2E / release_test
 
-按 `tests/release_test.md` 流程：启动 sandbox → 跑全屏 TUI → 改窗口尺寸 → 截图 → 人工核对布局正确，截图存档到 `release_test/YYYY-MM-DD-HH-MM-SS/`。
+`tests/release_test.md` item 14：启动全屏 TUI → 基线截图 → 改窗口尺寸 → 截图 → 校验布局按新尺寸重排（无重叠/乱码/半帧）→ 再次改尺寸立即截图 → 校验。截图存档到 `release_test/<时间戳>/`。
 
 ---
 
 ## Risks
 
-- **延迟**：单次截图最多 +500ms（仅当 TUI 无输出回流时；正常快路径几十 ms）。daemon renderer 超时已为 10s（commit `fb1894f`），预算充足。
-- **quiescence 偏紧**：极重绘机器上 30ms 可能偏短，导致快路径提前触发；两个常量已命名（`SYNC_RESIZE_TIMEOUT_MS` / `OUTPUT_QUIESCENCE_MS`），后续可调。
-- **nextFrame**：用 2×rAF 保证 canvas 提交最新 buffer；scrollback 路径走 `renderBufferToPng` 不依赖 canvas，harmless。
+- **延迟**：单次截图最多 +120ms（稳态 ~50ms、短重排 ~60–90ms、持续输出 ~120ms）。
+- **不再依赖 10s daemon 超时**：max +120ms 叠在基础截图耗时（大 canvas `toDataURL` + base64 + WS 往返）上仍远低于 daemon 现有 2s 超时，因此本修复**不需要** `fb1894f`（把超时 2s→10s）也能稳定工作。`fb1894f` 经核实**从未合入 main**（仅存在于 `feat/start-shell-screenshot-openclaw`），可独立合入做余量，但非本修复的前提。
+- **BURST 上限是启发式**：120ms 是「重排爆发落地」的经验估值；极复杂 TUI 的单次重排理论可能更久 → 截到部分帧。但比原 500ms 全局安静严格更好（后者持续输出下永远顶满，且稳态白等 500ms）。`PROBE_MS` / `DEFAULT_QUIESCENCE_MS` / `DEFAULT_RESIZE_TIMEOUT_MS` 均命名可调。
+- **awaitFrame**：2×rAF 保证 canvas 提交最新 buffer；scrollback 路径走 `renderBufferToPng` 不依赖 canvas，harmless。
 
 ---
 
 ## Out of Scope
 
 - `--with-frame` 路径的截图前 resize（记为 follow-up）。
-- 调整 daemon renderer 超时（已 10s，无需动）。
+- 合并 `fb1894f`（daemon 超时 2s→10s）：独立改进，非本修复前提（有界 settle 已与之解耦）。
