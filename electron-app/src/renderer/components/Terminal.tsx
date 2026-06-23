@@ -59,9 +59,21 @@ const SandboxTerminal = forwardRef<SandboxTerminalHandle, TerminalProps>(functio
           fit: () => fitAddon.fit(),
           resize: (cols, rows) => conn.resize(cols, rows),
           awaitFrame: () =>
-            new Promise<void>((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-            ),
+            new Promise<void>((resolve) => {
+              let done = false;
+              const finish = () => {
+                if (!done) {
+                  done = true;
+                  resolve();
+                }
+              };
+              // rAF for the normal (frontmost) case; setTimeout fallback so we
+              // never hang when rAF is throttled (app/tab not frontmost — e.g.
+              // after a window resize shifts focus), which would stall the
+              // daemon's screenshot request until its 2s timeout.
+              requestAnimationFrame(() => requestAnimationFrame(finish));
+              setTimeout(finish, 50);
+            }),
           readViewportCanvas: () => {
             const canvasEl = term.element?.querySelector("canvas");
             return canvasEl ? canvasEl.toDataURL("image/png").split(",")[1] : null;
