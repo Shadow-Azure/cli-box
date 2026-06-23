@@ -2,18 +2,19 @@
 
 **Date:** 2026-06-22
 **Branch:** feat/screenshot-pre-resize
-**Status:** Approved (revised 2026-06-23 — settle changed from global-quiet ≤500ms to bounded burst-wait ≤120ms; see Revision Notes)
+**Status:** Approved (revised 2026-06-23 — settle → bounded burst-wait ≤120ms; awaitFrame → rAF+setTimeout race. See Revision Notes)
 
 ---
 
 ## Revision Notes (2026-06-23)
 
-The release test (scenario 14: layout after window resize) revealed two flaws in the original settle design, both corrected in this revision:
+The release test (scenario 14: layout after window resize) revealed three issues in the original design, all corrected in this revision:
 
 1. **The settle waited for *global* output quiet (≤500ms cap).** Under continuous output (spinner / streaming TUI), output never quiets → every screenshot hit the 500ms cap. And in steady state (size unchanged), the settle waited the full 500ms for output that never arrives. Both coupled with the daemon's renderer-screenshot timeout.
 2. **The "always resize triggers a redraw" rationale was wrong for unchanged size.** `ioctl(TIOCSWINSZ)` only sends SIGWINCH when the size actually changes (the kernel compares old vs new). Same-size resize → no signal → no redraw. So "always resize" does NOT double as a canvas refresh on unchanged size.
+3. **`awaitFrame` used pure `2×requestAnimationFrame`, which hangs when rAF is throttled.** After a window resize the CLI Box app loses "frontmost" status (the terminal running `cli-box` is frontmost), so the renderer's rAF is throttled and `awaitFrame` never resolves → `captureToPng` stalls → the daemon's 2s screenshot timeout fires. Confirmed: `--with-frame` (ScreenCaptureKit, bypasses the renderer) succeeded while the default path hung; and activating the app (frontmost → rAF resumes) immediately un-stuck it. Pre-PR code used direct `canvas.toDataURL()` (no rAF wait), so it did not hang — this was a regression introduced by adding `awaitFrame`.
 
-The revised settle (below) is a **bounded burst-wait**: a no-output probe (skip the wait in steady state), an early-exit when the reflow burst quiets (short reflows don't pay the full cap), and a 120ms hard cap (continuous output can no longer cause long waits). Max added latency ≤120ms, which also **removes the dependency on the (never-merged) 10s daemon timeout** — see Risks.
+The revised settle (below) is a **bounded burst-wait**: a no-output probe (skip the wait in steady state), an early-exit when the reflow burst quiets (short reflows don't pay the full cap), and a 120ms hard cap (continuous output can no longer cause long waits). Max added latency ≤120ms, which also **removes the dependency on the (never-merged) 10s daemon timeout** — see Risks. And `awaitFrame` now **races `2×rAF` against a `setTimeout(50ms)` fallback** so it always resolves even when rAF is throttled (issue 3).
 
 ---
 
@@ -83,7 +84,7 @@ export async function waitForRedrawSettle(
 }
 ```
 
-`captureWithResizeSettle(deps, scrollOffset)`：`fit → baseline=now → resize → waitForRedrawSettle → awaitFrame(2×rAF) → capture`，保证 `resize()` 在任何 canvas/buffer 读取之前。`Terminal.tsx` 的 `captureToPng` 委托给它；`onOutput` 追加 `lastOutputAtRef.current = performance.now()` 喂给 settle 时钟。
+`captureWithResizeSettle(deps, scrollOffset)`：`fit → baseline=now → resize → waitForRedrawSettle → awaitFrame → capture`，保证 `resize()` 在任何 canvas/buffer 读取之前。`Terminal.tsx` 的 `captureToPng` 委托给它；`onOutput` 追加 `lastOutputAtRef.current = performance.now()` 喂给 settle 时钟。`awaitFrame` 实现：`2×requestAnimationFrame` 与 `setTimeout(50ms)` **竞速**——rAF 在 app 置顶时约 32ms 触发；若 app 非置顶(rAF 被 macOS 节流,如窗口 resize 后焦点切到运行 cli-box 的终端),rAF 不触发,由 setTimeout 兜底在 50ms 解析,**永不挂起**。
 
 ### 为什么「总是发 resize」而非「尺寸变了才发」
 
@@ -129,7 +130,7 @@ export async function waitForRedrawSettle(
 - **延迟**：单次截图最多 +120ms（稳态 ~50ms、短重排 ~60–90ms、持续输出 ~120ms）。
 - **不再依赖 10s daemon 超时**：max +120ms 叠在基础截图耗时（大 canvas `toDataURL` + base64 + WS 往返）上仍远低于 daemon 现有 2s 超时，因此本修复**不需要** `fb1894f`（把超时 2s→10s）也能稳定工作。`fb1894f` 经核实**从未合入 main**（仅存在于 `feat/start-shell-screenshot-openclaw`），可独立合入做余量，但非本修复的前提。
 - **BURST 上限是启发式**：120ms 是「重排爆发落地」的经验估值；极复杂 TUI 的单次重排理论可能更久 → 截到部分帧。但比原 500ms 全局安静严格更好（后者持续输出下永远顶满，且稳态白等 500ms）。`PROBE_MS` / `DEFAULT_QUIESCENCE_MS` / `DEFAULT_RESIZE_TIMEOUT_MS` 均命名可调。
-- **awaitFrame**：2×rAF 保证 canvas 提交最新 buffer；scrollback 路径走 `renderBufferToPng` 不依赖 canvas，harmless。
+- **awaitFrame**：`2×rAF` 与 `setTimeout(50ms)` 竞速,保证 canvas 提交最新 buffer;setTimeout 兜底使 app 非置顶(rAF 节流)时仍能在 50ms 解析,不会像纯 rAF 那样无限挂起(那会让 daemon 的 2s 截图超时触发——issue 3 / scenario 14 的根因)。scrollback 路径走 `renderBufferToPng` 不依赖 canvas,harmless。
 
 ---
 
