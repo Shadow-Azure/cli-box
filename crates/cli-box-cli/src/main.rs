@@ -1841,7 +1841,12 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
     let daemon_bin = find_daemon_binary()?;
     tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
 
-    let _child = Command::new(&daemon_bin)
+    // Headless when no Electron app is available (Linux / no GUI).
+    let mut daemon_cmd = Command::new(&daemon_bin);
+    if find_electron_binary().is_none() {
+        daemon_cmd.arg("--headless");
+    }
+    let _child = daemon_cmd
         .spawn()
         .context("Failed to launch cli-box-daemon")?;
 
@@ -1876,6 +1881,14 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
 /// If old Electron is dead → spawn new and wait for renderer_connected.
 async fn ensure_healthy_electron() {
     use std::io::Write;
+
+    // Headless: no Electron app present (Linux / cloud). Don't spawn or wait.
+    if find_electron_binary().is_none() {
+        eprintln!(
+            "Running in headless mode (no Electron). Screenshots use the server-side renderer."
+        );
+        return;
+    }
 
     // If existing Electron is alive, just wait for renderer_connected.
     // The IPC fix (removed cache) means old Electron auto-discovers new daemon.
