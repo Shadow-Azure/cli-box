@@ -43,6 +43,8 @@ struct PtySession {
     command: String,
     /// SQLite-backed persistent output store (replaces VecDeque buffer)
     store: Arc<PtyStore>,
+    /// Headless terminal grid, fed incrementally for server-side screenshots.
+    terminal: Arc<crate::capture::HeadlessTerminal>,
     /// Flag to signal the reader thread to stop
     stop_flag: Arc<AtomicBool>,
     /// Handle to the reader thread (for join on cleanup)
@@ -418,6 +420,9 @@ impl ProcessManager {
         // Create SQLite-backed persistent store and stop flag for the reader thread
         let store = PtyStore::new_in_memory(&tracked_id.to_string())?;
         let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        // Headless terminal grid fed by the reader thread (for screenshots).
+        let terminal = Arc::new(crate::capture::HeadlessTerminal::new(cols, rows));
+        let thread_terminal = Arc::clone(&terminal);
 
         // Create broadcast channel for streaming output to WebSocket subscribers
         let (output_tx, _) = broadcast::channel::<String>(256);
@@ -453,6 +458,8 @@ impl ProcessManager {
                             if let Err(e) = thread_store.append(&text) {
                                 warn!("PTY reader {tracked_id}: store append failed: {e}");
                             }
+                            // Feed raw bytes to the headless terminal grid (for screenshots).
+                            thread_terminal.feed(&read_buf[..n]);
                             // Real-time broadcast to current subscribers
                             let receiver_count = thread_tx.receiver_count();
                             let _ = thread_tx.send(text);
@@ -486,6 +493,7 @@ impl ProcessManager {
                 child_pid: child_pid.unwrap_or(0),
                 command: command.to_string(),
                 store,
+                terminal,
                 stop_flag,
                 reader_thread: Some(reader_thread),
                 output_tx,
@@ -505,8 +513,6 @@ impl ProcessManager {
             is_running: true,
         })
     }
-
-
 
     /// List all running processes in the sandbox
     pub fn list_processes() -> Result<Vec<ProcessInfo>> {
@@ -581,7 +587,6 @@ impl ProcessManager {
         Ok(())
     }
 
-
     /// Send input to a PTY process
     #[cfg(unix)]
     pub fn send_input(pid: u32, data: &[u8]) -> Result<()> {
@@ -619,7 +624,6 @@ impl ProcessManager {
         }
     }
 
-
     /// Resize a PTY session's terminal dimensions
     #[cfg(unix)]
     pub fn resize_pty(pid: u32, cols: u16, rows: u16) -> Result<()> {
@@ -641,7 +645,6 @@ impl ProcessManager {
         info!("[pty] resize: pid={}, cols={}, rows={}", pid, cols, rows);
         Ok(())
     }
-
 
     /// Read output from a PTY process.
     ///
@@ -693,8 +696,6 @@ impl ProcessManager {
         Ok(Some(text))
     }
 
-
-
     /// Subscribe to PTY output stream for WebSocket streaming.
     /// Returns a broadcast::Receiver that receives output chunks in real-time.
     #[cfg(unix)]
@@ -708,7 +709,6 @@ impl ProcessManager {
         Ok(session.output_tx.subscribe())
     }
 
-
     /// Get the PtyStore for a session (for WebSocket replay).
     #[cfg(unix)]
     pub fn get_store(pid: u32) -> Result<Arc<PtyStore>> {
@@ -721,6 +721,17 @@ impl ProcessManager {
         Ok(Arc::clone(&session.store))
     }
 
+    /// Get the HeadlessTerminal for a session (for headless screenshots).
+    #[cfg(unix)]
+    pub fn get_terminal(pid: u32) -> Result<Arc<crate::capture::HeadlessTerminal>> {
+        let sessions = SESSIONS
+            .lock()
+            .map_err(|e| AppError::Process(e.to_string()))?;
+        let session = sessions
+            .get(&pid)
+            .ok_or_else(|| AppError::Process(format!("Process {pid} not found")))?;
+        Ok(Arc::clone(&session.terminal))
+    }
 }
 
 #[cfg(test)]
