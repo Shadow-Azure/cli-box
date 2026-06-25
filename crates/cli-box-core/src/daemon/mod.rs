@@ -91,6 +91,9 @@ pub struct DaemonState {
     pub screenshot_request_counter: u64,
     /// Sandboxes whose xterm.js terminal has been mounted and is ready.
     pub terminal_ready_sandboxes: HashSet<String>,
+    /// True when running without the Electron renderer (Linux / no GUI).
+    /// Routes screenshots/scrollback to the server-side HeadlessTerminal.
+    pub headless: bool,
 }
 
 impl DaemonState {
@@ -542,6 +545,10 @@ async fn screenshot_handler(
     } else {
         q.scroll.unwrap_or(0)
     };
+    // Headless: render server-side when no Electron renderer is attached.
+    if state.lock().await.headless {
+        return screenshot_headless(state.clone(), &id, offset).await;
+    }
     // Default: renderer only, no SCK fallback
     match request_renderer_screenshot(state.clone(), &id, offset).await {
         Ok(png_data) => {
@@ -563,6 +570,68 @@ async fn screenshot_handler(
                 reason
             )))
         }
+    }
+}
+
+/// Capture a screenshot by rendering the PTY terminal grid server-side.
+/// Used when running headless (no Electron renderer). `scroll` is a line
+/// offset into the scrollback; large values (e.g. from --top) clamp to top.
+async fn screenshot_headless(
+    state: Arc<Mutex<DaemonState>>,
+    id: &str,
+    scroll: u32,
+) -> Result<Response, AppError> {
+    let pty_pid: u32 = {
+        let s = state.lock().await;
+        let sb = s
+            .sandboxes
+            .get(id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
+        sb.pty_pid
+            .ok_or_else(|| AppError::Process(format!("Sandbox {id} has no PTY")))?
+    };
+    let terminal =
+        tokio::task::spawn_blocking(move || crate::process::ProcessManager::get_terminal(pty_pid))
+            .await
+            .map_err(|e| AppError::Screenshot(format!("get_terminal task failed: {e}")))??;
+    let png_data = tokio::task::spawn_blocking(move || terminal.render_png(scroll as usize))
+        .await
+        .map_err(|e| AppError::Screenshot(format!("render task failed: {e}")))??;
+    Ok(screenshot_response(png_data, "headless", None))
+}
+
+/// Read scrollback from server-side state (headless). `raw` returns the raw
+/// PTY bytes from PtyStore; otherwise the parsed terminal grid text.
+async fn scrollback_headless(
+    state: Arc<Mutex<DaemonState>>,
+    id: &str,
+    raw: bool,
+) -> Result<String, AppError> {
+    let pty_pid: u32 = {
+        let s = state.lock().await;
+        let sb = s
+            .sandboxes
+            .get(id)
+            .ok_or_else(|| AppError::Instance(format!("Sandbox '{id}' not found")))?;
+        sb.pty_pid
+            .ok_or_else(|| AppError::Process(format!("Sandbox {id} has no PTY")))?
+    };
+    if raw {
+        let store =
+            tokio::task::spawn_blocking(move || crate::process::ProcessManager::get_store(pty_pid))
+                .await
+                .map_err(|e| AppError::Process(format!("get_store task failed: {e}")))??;
+        let chunks = store
+            .read_all()
+            .map_err(|e| AppError::Process(format!("read_all failed: {e}")))?;
+        Ok(chunks.into_iter().map(|c| c.data).collect())
+    } else {
+        let terminal = tokio::task::spawn_blocking(move || {
+            crate::process::ProcessManager::get_terminal(pty_pid)
+        })
+        .await
+        .map_err(|e| AppError::Screenshot(format!("get_terminal task failed: {e}")))??;
+        Ok(terminal.rendered_text())
     }
 }
 
@@ -588,6 +657,16 @@ async fn scrollback_handler(
         }
     }
 
+    // Headless: read server-side PTY/grid text when no renderer is attached.
+    if state.lock().await.headless {
+        let text = scrollback_headless(state.clone(), &id, q.raw).await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+        return Ok((StatusCode::OK, headers, text).into_response());
+    }
     match request_renderer_scrollback(state.clone(), &id, q.raw, q.from_line, q.to_line).await {
         Ok(text) => {
             let mut headers = HeaderMap::new();
@@ -1591,9 +1670,9 @@ async fn shutdown_handler() -> Json<serde_json::Value> {
 ///
 /// Writes `daemon.json`, binds the TCP listener, and serves until
 /// interrupted. Cleans up `daemon.json` on ctrl-c.
-pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_daemon(port: u16, headless: bool) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
-        "Daemon starting on port {port} (pid={})",
+        "Daemon starting on port {port} (pid={}, headless={headless})",
         std::process::id()
     );
 
@@ -1606,6 +1685,7 @@ pub async fn run_daemon(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
+        headless,
     }));
 
     let router = build_daemon_router(state.clone());
@@ -1812,6 +1892,7 @@ mod tests {
             pending_scrollback: HashMap::new(),
             screenshot_request_counter: 0,
             terminal_ready_sandboxes: HashSet::new(),
+            headless: false,
         }))
     }
 
@@ -1840,6 +1921,7 @@ mod tests {
             pending_scrollback: HashMap::new(),
             screenshot_request_counter: 0,
             terminal_ready_sandboxes: HashSet::new(),
+            headless: false,
         }))
     }
 

@@ -29,10 +29,12 @@ futures-util.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 rusqlite.workspace = true
+vt100 = "0.16"
+ab_glyph = "0.2"
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.25", features = ["highsierra", "elcapitan"] }
 core-foundation = "0.10"
-libc = "0.2"
 objc = "0.2"
 screencapturekit = { version = "2.1", features = ["macos_14_0"], optional = true }

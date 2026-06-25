@@ -13,7 +13,8 @@
   },
   "optionalDependencies": {
     "cli-box-darwin-arm64": "0.2.8",
-    "cli-box-electron-darwin-arm64": "0.2.8"
+    "cli-box-electron-darwin-arm64": "0.2.8",
+    "cli-box-linux-x64": "0.2.8"
   },
   "files": [
     "skill/SKILL.md",

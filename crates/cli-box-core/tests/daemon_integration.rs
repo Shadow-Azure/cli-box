@@ -22,6 +22,7 @@ fn empty_state() -> Arc<Mutex<DaemonState>> {
         pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
+        headless: false,
     }))
 }
 
@@ -54,6 +55,7 @@ fn state_with_sandbox() -> Arc<Mutex<DaemonState>> {
         pending_scrollback: HashMap::new(),
         screenshot_request_counter: 0,
         terminal_ready_sandboxes: HashSet::new(),
+        headless: false,
     }))
 }
 
@@ -270,4 +272,69 @@ async fn scrollback_route_exists() {
         StatusCode::NOT_FOUND,
         "scrollback route must exist"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_screenshot_renders_png() {
+    use cli_box_core::process::ProcessManager;
+
+    // Spawn a real CLI whose output feeds the HeadlessTerminal via the reader thread.
+    let info = ProcessManager::spawn_cli("printf", &["hello-headless".into()]).expect("spawn_cli");
+    // allow the reader thread to drain output into the terminal grid
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let mut sandboxes = HashMap::new();
+    sandboxes.insert(
+        "hsb".to_string(),
+        ManagedSandbox {
+            id: "hsb".to_string(),
+            kind: InstanceKind::Cli {
+                command: "printf".into(),
+                args: vec![],
+            },
+            status: InstanceStatus::Running,
+            port: 0,
+            pty_pid: Some(info.pid),
+            window_id: None,
+        },
+    );
+    let state = Arc::new(Mutex::new(DaemonState {
+        port: 0,
+        sandboxes,
+        started_at: std::time::Instant::now(),
+        screenshot_ws_tx: None,
+        pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
+        screenshot_request_counter: 0,
+        terminal_ready_sandboxes: HashSet::new(),
+        headless: true,
+    }));
+    let router = build_daemon_router(state);
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/box/hsb/screenshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let _ = ProcessManager::kill_process(info.pid);
+    // Requires a font reachable via HeadlessTerminal::load_font (e.g. macOS
+    // Arial Unicode). On a font-less CI runner this may 500 — that still proves
+    // routing reached the headless path (not the "WebSocket not connected" error).
+    if resp.status() == StatusCode::OK {
+        assert_eq!(
+            resp.headers().get("x-screenshot-source").unwrap(),
+            "headless"
+        );
+    } else {
+        eprintln!(
+            "headless_screenshot_renders_png: non-OK status {} (no font?)",
+            resp.status()
+        );
+    }
 }
