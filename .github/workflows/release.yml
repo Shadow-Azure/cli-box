@@ -177,6 +177,7 @@ jobs:
             const files = [
               'packages/cli-box-darwin-arm64/package.json',
               'packages/cli-box-electron-darwin-arm64/package.json',
+              'packages/cli-box-linux-x64/package.json',
               'packages/cli-box-skill/package.json'
             ];
             for (const file of files) {
@@ -205,6 +206,62 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/cli-box-darwin-arm64/package.json \
                   packages/cli-box-electron-darwin-arm64/package.json \
+                  packages/cli-box-linux-x64/package.json \
                   packages/cli-box-skill/package.json
           git diff --cached --quiet || git commit -m "chore(npm): bump package versions to ${GITHUB_REF_NAME#v}"
           git push
+
+  build-linux:
+    name: Build Linux (headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: "v2-linux-release"
+
+      - name: Build CLI + daemon (release, headless)
+        run: cargo build --release -p cli-box-cli -p cli-box-daemon
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p release
+          cp target/release/cli-box release/cli-box-linux-x64
+          cp target/release/cli-box-daemon release/cli-box-daemon-linux-x64
+          chmod +x release/cli-box-linux-x64 release/cli-box-daemon-linux-x64
+          cd release && tar czf cli-box-linux-x64.tar.gz cli-box-linux-x64 cli-box-daemon-linux-x64 && cd ..
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          files: release/cli-box-linux-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish npm platform package
+        if: github.event_name == 'release'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p packages/cli-box-linux-x64/bin
+          cp target/release/cli-box packages/cli-box-linux-x64/bin/
+          cp target/release/cli-box-daemon packages/cli-box-linux-x64/bin/
+          chmod +x packages/cli-box-linux-x64/bin/*
+          node -e "const fs=require('fs');const f='packages/cli-box-linux-x64/package.json';const p=JSON.parse(fs.readFileSync(f,'utf8'));p.version='$VERSION';fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n');"
+          npm publish ./packages/cli-box-linux-x64 --access public
