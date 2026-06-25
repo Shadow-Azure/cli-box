@@ -42,10 +42,11 @@
 
 **Files:**
 - Modify: `crates/cli-box-core/Cargo.toml`
-- Create: `crates/cli-box-core/assets/fonts/SarasaMonoSC-Regular.ttf`
+
+> **Font 策略变更（执行期裁定）**：原方案 B 计划 `include_bytes!` 嵌入 CJK 字体。因执行环境无法访问 GitHub release 资产获取可再分发的 CJK 字体二进制，且 5–20MB 二进制会膨胀 git/产物，**改为运行时字体路径加载**（见 Task 3）：`HeadlessTerminal` 按 `CLIBOX_FONT` → `~/.cli-box/font.ttf` → 系统字体路径解析。目标不变（云端 CJK 正确渲染；部署时放 Sarasa/Noto 字体或 `apt install fonts-noto-cjk`）。本地测试用 macOS 自带 Arial Unicode.ttf。Task 1 因此只加依赖，不提交字体二进制。
 
 **Interfaces:**
-- Produces: `vt100`/`ab_glyph` 可用；`SarasaMonoSC-Regular.ttf` 存在，供 Task 3 的 `include_bytes!` 引用。
+- Produces: `vt100`/`ab_glyph` 可用（编译通过）。字体为运行时资产，不在此 Task 提交。
 
 - [ ] **Step 1: 添加依赖**
 
@@ -56,25 +57,7 @@ vt100 = "0.16"
 ab_glyph = "0.2"
 ```
 
-- [ ] **Step 2: 获取 CJK 等宽字体**
-
-```bash
-mkdir -p crates/cli-box-core/assets/fonts
-# Sarasa Mono SC（等宽 + 中日韩 + 拉丁），约 5MB
-curl -L -o /tmp/sarasa.zip "https://github.com/be5invis/Sarasa-Gothic/releases/download/v1.0.26/SarasaMonoSC-1.0.26.zip" || true
-# 若 zip 不可用，改用 Noto Sans Mono CJK：
-# curl -L -o crates/cli-box-core/assets/fonts/NotoSansMonoCJKsc-Regular.otf "https://github.com/notofonts/noto-cjk/raw/main/Sans/Mono/NotoSansMonoCJKsc-Regular.otf"
-```
-
-将解压后的 `sarasa-mono-sc-regular.ttf` 重命名放置为 `crates/cli-box-core/assets/fonts/SarasaMonoSC-Regular.ttf`。确认文件存在且 > 1MB：
-
-```bash
-ls -lh crates/cli-box-core/assets/fonts/
-```
-
-> 说明：字体是二进制资产，无法在计划中以文本提供。若上述 URL 不可达，实现者从 [Sarasa Gothic releases](https://github.com/be5invis/Sarasa-Gothic/releases) 或 [Google Noto](https://fonts.google.com/noto) 手动下载任一 CJK 等宽字体（Sarasa Mono SC / Noto Sans Mono CJK SC / Source Han Mono），文件名需与 Task 3 的 `include_bytes!` 路径一致。若文件名为 `.otf`，Task 3 的常量名/路径相应调整。
-
-- [ ] **Step 3: 验证依赖编译**
+- [ ] **Step 2: 验证依赖编译**（字体为运行时资产，本 Task 不提交二进制）
 
 ```bash
 cargo build -p cli-box-core 2>&1 | tail -5
@@ -84,8 +67,8 @@ Expected: 编译通过（新依赖被拉取）。
 - [ ] **Step 4: 提交**
 
 ```bash
-git add crates/cli-box-core/Cargo.toml crates/cli-box-core/assets/fonts/
-git commit -m "chore(core): add vt100/ab_glyph deps and CJK font asset"
+git add crates/cli-box-core/Cargo.toml
+git commit -m "chore(core): add vt100/ab_glyph deps"
 ```
 
 ---
@@ -200,11 +183,39 @@ use crate::error::{AppError, Result};
 use std::sync::Mutex;
 use vt100::{Color, Screen};
 
-/// Embedded CJK-capable monospace font (Latin + CJK; emoji not included).
-const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/SarasaMonoSC-Regular.ttf");
-
 const DEFAULT_FG: (u8, u8, u8) = (229, 229, 229);
 const DEFAULT_BG: (u8, u8, u8) = (0, 0, 0);
+
+/// Load a font at runtime (NOT embedded): CLIBOX_FONT env → ~/.cli-box/font.ttf
+/// → known system CJK/mono font paths. Returns None if no usable font found.
+/// Used by render_png; feed/rendered_text need no font. On macOS the local
+/// Arial Unicode.ttf is found for dev; on Linux deploy by installing
+/// fonts-noto-cjk or dropping a Sarasa TTF at ~/.cli-box/font.ttf.
+fn load_font() -> Option<ab_glyph::FontVec> {
+    use ab_glyph::FontVec;
+    let candidates: Vec<std::path::PathBuf> = std::env::var("CLIBOX_FONT")
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .chain(
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".cli-box/font.ttf")),
+        )
+        .chain([
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf".into(),
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf".into(),
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".into(),
+        ])
+        .collect();
+    for p in candidates {
+        if let Ok(bytes) = std::fs::read(&p) {
+            if let Ok(f) = FontVec::try_from_vec(bytes) {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {
@@ -390,8 +401,10 @@ Expected: 编译失败（`render_png` 未定义）。
         use image::{ImageBuffer, Rgba, RgbaImage};
         use std::io::Cursor;
 
-        let font =
-            FontRef::try_from_slice(FONT_BYTES).map_err(|e| AppError::Screenshot(format!("font load: {e}")))?;
+        let font = load_font()
+            .ok_or_else(|| AppError::Screenshot(
+                "no font available for rendering; set CLIBOX_FONT to a TTF/OTF path".into()
+            ))?;
 
         // Monospace metrics. PxScale: x = advance-ish, y = line height.
         let line_h = 18.0f32;
