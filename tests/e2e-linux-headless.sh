@@ -13,8 +13,12 @@ cleanup() {
 trap cleanup EXIT
 
 # `printf` is a single non-compound command -> no shell wrap, no zsh needed.
-SID=$(cli-box start printf -- headless-ok 2>&1 | sed -n 's/.*id=\([^,]*\).*/\1/p')
-test -n "$SID" || { echo "FAIL: no sandbox id from start" >&2; exit 1; }
+# Anchor on "Sandbox created: id=" (NOT a bare `id=` regex — `window_id=None`
+# contains "id=" and would be captured greedily on headless).
+RAW=$(cli-box start printf -- headless-ok 2>&1)
+echo "$RAW"
+SID=$(echo "$RAW" | sed -n 's/.*Sandbox created: id=\([^,]*\),.*/\1/p')
+test -n "$SID" || { echo "FAIL: no sandbox id from start; raw: $RAW" >&2; exit 1; }
 echo "started sandbox: $SID"
 
 # Give the PTY + reader thread time to render the command output.
