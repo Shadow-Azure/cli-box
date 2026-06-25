@@ -1846,6 +1846,37 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
     if find_electron_binary().is_none() {
         daemon_cmd.arg("--headless");
     }
+    // Detach the daemon's stdio: it must NOT inherit the CLI's pipes, otherwise
+    // it keeps the write-end open and hangs callers like `$(cli-box start | sed)`
+    // that wait for EOF. Redirect to ~/.cli-box/daemon.log (logs preserved),
+    // falling back to /dev/null if the log file cannot be opened.
+    daemon_cmd.stdin(std::process::Stdio::null());
+    let log_path = dirs::home_dir()
+        .map(|h| h.join(".cli-box").join("daemon.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/cli-box-daemon.log"));
+    let _ = std::fs::create_dir_all(log_path.parent().unwrap_or(std::path::Path::new("/tmp")));
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => {
+            let f2 = f.try_clone();
+            daemon_cmd.stdout(std::process::Stdio::from(f));
+            match f2 {
+                Ok(g) => {
+                    daemon_cmd.stderr(std::process::Stdio::from(g));
+                }
+                Err(_) => {
+                    daemon_cmd.stderr(std::process::Stdio::null());
+                }
+            }
+        }
+        Err(_) => {
+            daemon_cmd.stdout(std::process::Stdio::null());
+            daemon_cmd.stderr(std::process::Stdio::null());
+        }
+    }
     let _child = daemon_cmd
         .spawn()
         .context("Failed to launch cli-box-daemon")?;
