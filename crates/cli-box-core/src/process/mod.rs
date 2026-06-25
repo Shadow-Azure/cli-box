@@ -358,6 +358,16 @@ impl ProcessManager {
         ))
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn spawn_app_with_window(
+        _app_path: &str,
+        _sandbox_id: Option<&str>,
+    ) -> Result<(ProcessInfo, Option<u32>)> {
+        Err(AppError::Process(
+            "spawn_app_with_window only supported on macOS".into(),
+        ))
+    }
+
     /// Launch a CLI process with PTY support (default 80x24)
     #[cfg(unix)]
     pub fn spawn_cli(command: &str, args: &[String]) -> Result<ProcessInfo> {
