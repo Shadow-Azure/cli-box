@@ -166,10 +166,15 @@ impl HeadlessTerminal {
 
         let img_w = cols as u32 * cell_w;
         let img_h = rows as u32 * cell_h;
-        let mut img: RgbaImage =
-            ImageBuffer::from_pixel(img_w, img_h, Rgba([DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2, 255]));
+        let mut img: RgbaImage = ImageBuffer::from_pixel(
+            img_w,
+            img_h,
+            Rgba([DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2, 255]),
+        );
 
-        let blend = |bg: u8, fg: u8, a: f32| -> u8 { ((bg as f32) * (1.0 - a) + (fg as f32) * a).round() as u8 };
+        let blend = |bg: u8, fg: u8, a: f32| -> u8 {
+            ((bg as f32) * (1.0 - a) + (fg as f32) * a).round() as u8
+        };
 
         for row in 0..rows {
             for col in 0..cols {
@@ -177,11 +182,19 @@ impl HeadlessTerminal {
                     continue;
                 };
                 let bg = color_rgb(
-                    if cell.inverse() { cell.fgcolor() } else { cell.bgcolor() },
+                    if cell.inverse() {
+                        cell.fgcolor()
+                    } else {
+                        cell.bgcolor()
+                    },
                     DEFAULT_BG,
                 );
                 let fg = color_rgb(
-                    if cell.inverse() { cell.bgcolor() } else { cell.fgcolor() },
+                    if cell.inverse() {
+                        cell.bgcolor()
+                    } else {
+                        cell.fgcolor()
+                    },
                     DEFAULT_FG,
                 );
                 let x0 = col as u32 * cell_w;
