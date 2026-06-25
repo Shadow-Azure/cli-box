@@ -1638,6 +1638,12 @@ fn find_daemon_binary() -> anyhow::Result<PathBuf> {
 
 /// Locate the Electron app binary next to the current executable.
 fn find_electron_binary() -> Option<PathBuf> {
+    // Electron is a macOS .app bundle; it cannot run on other platforms.
+    // Returning None on non-macOS drives the headless path (no renderer)
+    // and skips the macOS-app auto-download.
+    if cfg!(not(target_os = "macos")) {
+        return None;
+    }
     let exe_path = std::env::current_exe().ok()?;
     let exe_dir = exe_path.parent()?;
 
