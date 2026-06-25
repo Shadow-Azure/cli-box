@@ -63,6 +63,7 @@ static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 /// Known Chromium-based app bundle identifiers.
 /// These apps enforce single-instance and need `open -g -n --args --user-data-dir`
 /// to create isolated processes that don't interfere with the user's existing browser.
+#[cfg(target_os = "macos")]
 const CHROMIUM_BUNDLE_IDS: &[&str] = &[
     "com.google.Chrome",
     "com.google.Chrome.beta",
@@ -81,6 +82,7 @@ const CHROMIUM_BUNDLE_IDS: &[&str] = &[
 ];
 
 /// Read `CFBundleIdentifier` from an app bundle's Info.plist.
+#[cfg(target_os = "macos")]
 fn read_bundle_id(app_path: &str) -> Option<String> {
     let plist_path = std::path::Path::new(app_path).join("Contents/Info.plist");
     let data = std::fs::read_to_string(plist_path).ok()?;
@@ -93,6 +95,7 @@ fn read_bundle_id(app_path: &str) -> Option<String> {
 }
 
 /// Check if an app is Chromium-based by its bundle identifier.
+#[cfg(target_os = "macos")]
 fn is_chromium_app(app_path: &str) -> bool {
     match read_bundle_id(app_path) {
         Some(id) => CHROMIUM_BUNDLE_IDS

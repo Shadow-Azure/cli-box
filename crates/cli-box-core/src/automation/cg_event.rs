@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use crate::automation::keycodes;
 use crate::error::{AppError, Result};
 
