@@ -232,8 +232,13 @@ impl HeadlessTerminal {
         }
 
         let mut buf = Cursor::new(Vec::new());
-        img.write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| AppError::Screenshot(format!("png encode: {e}")))?;
+        let encode_result = img.write_to(&mut buf, image::ImageFormat::Png);
+        // Restore the scrollback view to the current screen. render_png sets a
+        // scrolled-back view above; if left in place it leaks into the parser's
+        // persistent scrollback_offset and corrupts a later rendered_text() (the
+        // headless scrollback non-raw path), showing history instead of the screen.
+        parser.screen_mut().set_scrollback(0);
+        encode_result.map_err(|e| AppError::Screenshot(format!("png encode: {e}")))?;
         Ok(buf.into_inner())
     }
 
@@ -306,5 +311,30 @@ mod tests {
         let img = image::load_from_memory(&png).expect("decode").to_rgba8();
         let has_ink = img.pixels().any(|p| p[0] > 50 || p[1] > 50 || p[2] > 50);
         assert!(has_ink, "rendered PNG should contain non-background pixels");
+    }
+
+    #[test]
+    fn render_png_resets_scrollback_offset() {
+        // Regression: render_png(scroll) used to mutate the parser's persistent
+        // scrollback_offset and never reset it, so a later rendered_text()
+        // (headless scrollback non-raw path) returned the scrolled-back view
+        // instead of the current screen. 3-row terminal fed 5 lines => the top
+        // two lines scroll off into history; current screen holds line-two/three/four.
+        let term = HeadlessTerminal::new(20, 3);
+        term.feed(b"line-zero\r\nline-one\r\nline-two\r\nline-three\r\nline-four");
+        let current = term.rendered_text();
+        assert!(
+            current.contains("line-four"),
+            "baseline must show the current bottom (line-four); got {current:?}"
+        );
+        // Scroll to the very top. render_png needs a font; when none is available
+        // it returns early WITHOUT touching the offset, so this regression
+        // assertion is only binding in environments that ship a font (CI does).
+        let _ = term.render_png(usize::MAX);
+        assert_eq!(
+            term.rendered_text(),
+            current,
+            "render_png must reset scrollback offset — rendered_text leaked the scrolled view"
+        );
     }
 }

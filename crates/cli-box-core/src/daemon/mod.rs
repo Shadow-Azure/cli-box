@@ -600,8 +600,13 @@ async fn screenshot_headless(
     Ok(screenshot_response(png_data, "headless", None))
 }
 
-/// Read scrollback from server-side state (headless). `raw` returns the raw
-/// PTY bytes from PtyStore; otherwise the parsed terminal grid text.
+/// Read scrollback from server-side state (headless).
+///
+/// - `raw = true`: full PTY bytes from PtyStore — the complete output history,
+///   matching what the macOS renderer (xterm.js full buffer) returns.
+/// - `raw = false`: the current visible screen as parsed text. Unlike the macOS
+///   path this covers only the on-screen rows, not the full buffer; the full
+///   history is available via `raw`. `from_line`/`to_line` are ignored here.
 async fn scrollback_headless(
     state: Arc<Mutex<DaemonState>>,
     id: &str,

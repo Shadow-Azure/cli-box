@@ -338,3 +338,140 @@ async fn headless_screenshot_renders_png() {
         );
     }
 }
+
+#[cfg(unix)]
+async fn body_text(resp: axum::http::Response<Body>) -> String {
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .expect("read response body");
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+/// Headless daemon state carrying a single CLI sandbox bound to `pty_pid`.
+#[cfg(unix)]
+fn headless_state_with_sandbox(id: &str, pty_pid: u32) -> Arc<Mutex<DaemonState>> {
+    let mut sandboxes = HashMap::new();
+    sandboxes.insert(
+        id.to_string(),
+        ManagedSandbox {
+            id: id.to_string(),
+            kind: InstanceKind::Cli {
+                command: "printf".into(),
+                args: vec![],
+            },
+            status: InstanceStatus::Running,
+            port: 0,
+            pty_pid: Some(pty_pid),
+            window_id: None,
+        },
+    );
+    Arc::new(Mutex::new(DaemonState {
+        port: 0,
+        sandboxes,
+        started_at: std::time::Instant::now(),
+        screenshot_ws_tx: None,
+        pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
+        screenshot_request_counter: 0,
+        terminal_ready_sandboxes: HashSet::new(),
+        headless: true,
+    }))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_scrollback_returns_marker_raw_and_nonraw() {
+    use cli_box_core::process::ProcessManager;
+
+    let info =
+        ProcessManager::spawn_cli("printf", &["hsb-marker-RAW\n".into()]).expect("spawn_cli");
+    // Let the reader thread drain printf's output into the terminal grid + PtyStore.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let state = headless_state_with_sandbox("hsb", info.pid);
+
+    // raw: full PTY bytes from PtyStore.
+    let resp = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/box/hsb/scrollback?raw=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let raw_text = body_text(resp).await;
+    assert!(
+        raw_text.contains("hsb-marker-RAW"),
+        "raw scrollback must contain marker; got: {raw_text:?}"
+    );
+
+    // non-raw: current screen text from HeadlessTerminal.
+    let resp = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/box/hsb/scrollback")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let nonraw_text = body_text(resp).await;
+    assert!(
+        nonraw_text.contains("hsb-marker-RAW"),
+        "non-raw scrollback must contain marker on current screen; got: {nonraw_text:?}"
+    );
+
+    let _ = ProcessManager::kill_process(info.pid);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_scrollback_stable_after_top_screenshot() {
+    use cli_box_core::process::ProcessManager;
+
+    // Regression (Issue 1): a --top screenshot renders with a large scrollback
+    // offset. Before the render_png reset, that offset leaked into the shared
+    // parser and corrupted the next non-raw scrollback (showing history, not the
+    // current screen).
+    // 31 lines into a 24-row terminal => the first 7 scroll off into history and
+    // the marker lands on the bottom screen row. A --top screenshot then sets a
+    // nonzero scrollback_offset; without the render_png reset that offset leaks
+    // into the shared parser, so the non-raw scrollback below would read
+    // scrolled-back history (rows 1..24) instead of the current screen.
+    let info = ProcessManager::spawn_cli(
+        "sh",
+        &["-c".into(), "seq 1 30; echo steady-current-mark".into()],
+    )
+    .expect("spawn_cli");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let state = headless_state_with_sandbox("hsb2", info.pid);
+
+    let _ = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/box/hsb2/screenshot?scroll=1000000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+    let resp = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/box/hsb2/scrollback")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_text(resp).await;
+    assert!(
+        text.contains("steady-current-mark"),
+        "non-raw scrollback after a --top screenshot must still show the current screen; got: {text:?}"
+    );
+
+    let _ = ProcessManager::kill_process(info.pid);
+}
