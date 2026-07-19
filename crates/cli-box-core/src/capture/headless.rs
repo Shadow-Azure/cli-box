@@ -336,15 +336,37 @@ mod tests {
         // ASCII letters showed only their top, sitting at the bottom of the row.
         // Fix: derive the baseline offset from the rasterizer-consistent
         // `as_scaled(scale).ascent()`.
-        let term = HeadlessTerminal::new(8, 2);
-        term.feed(b"M");
-        let png = match term.render_png(0) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipped (no font): {e}");
+        // The bug only manifests on fonts whose ascender exceeds the em square
+        // (ascent_unscaled > units_per_em) — CJK-capable faces (Arial Unicode,
+        // Noto CJK). On a Latin-only font the old buggy offset stays inside the
+        // cell and this test would pass for the wrong reason, so compute the
+        // *buggy* offset and skip loudly when it would not overflow the cell,
+        // instead of false-passing on a host without a CJK-scale font.
+        use ab_glyph::Font;
+        let font = match load_font() {
+            Some(f) => f,
+            None => {
+                eprintln!("skipped (no font available)");
                 return;
             }
         };
+        let upem = font.units_per_em().unwrap_or(1.0);
+        let buggy_offset = font.ascent_unscaled() / upem * 18.0;
+        if buggy_offset <= 18.0 {
+            eprintln!(
+                "skipped: loaded font's buggy baseline offset is {buggy_offset:.2} px, \
+                 which does not exceed the cell height (18 px); the clipping bug does \
+                 not manifest on this font, so the test would pass for the wrong reason"
+            );
+            return;
+        }
+        drop(font);
+
+        let term = HeadlessTerminal::new(8, 2);
+        term.feed(b"M");
+        let png = term
+            .render_png(0)
+            .expect("font was confirmed loadable above");
         let img = image::load_from_memory(&png).expect("decode").to_rgba8();
         let (img_w, img_h) = (img.width(), img.height());
         let cell_h = img_h / 2;
