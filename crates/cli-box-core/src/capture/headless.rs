@@ -65,6 +65,9 @@ fn color_rgb(c: Color, default: (u8, u8, u8)) -> (u8, u8, u8) {
 ///
 /// Returns `None` if no usable font is found. `feed`/`rendered_text` need no
 /// font; only `render_png` does, and it errors clearly when `None`.
+///
+/// TTF/OTF/TTC are all accepted. A `.ttc` collection loads its first face
+/// (index 0) — ab_glyph's `try_from_vec` delegates to `try_from_vec_and_index(.., 0)`.
 fn load_font() -> Option<ab_glyph::FontVec> {
     use ab_glyph::FontVec;
     let candidates: Vec<std::path::PathBuf> = std::env::var("CLIBOX_FONT")
