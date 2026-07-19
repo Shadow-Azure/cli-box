@@ -48,7 +48,7 @@
 **Interfaces:**
 - Produces: `vt100`/`ab_glyph` 可用（编译通过）。字体为运行时资产，不在此 Task 提交。
 
-- [ ] **Step 1: 添加依赖**
+- [x] **Step 1: 添加依赖**
 
 在 `crates/cli-box-core/Cargo.toml` 的 `[dependencies]` 末尾（`rusqlite.workspace = true` 之后）追加：
 
@@ -57,14 +57,14 @@ vt100 = "0.16"
 ab_glyph = "0.2"
 ```
 
-- [ ] **Step 2: 验证依赖编译**（字体为运行时资产，本 Task 不提交二进制）
+- [x] **Step 2: 验证依赖编译**（字体为运行时资产，本 Task 不提交二进制）
 
 ```bash
 cargo build -p cli-box-core 2>&1 | tail -5
 ```
 Expected: 编译通过（新依赖被拉取）。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add crates/cli-box-core/Cargo.toml
@@ -84,7 +84,7 @@ git commit -m "chore(core): add vt100/ab_glyph deps"
 
 > 此 Task 不引入新功能，仅把已有跨平台 PTY 实现从 `cfg(target_os="macos")` 释放为 `cfg(unix)`，并删除返回错误的非 macOS 桩。本机验证（macOS）证明不回归；Linux 编译的权威证明在 Task 7 的 CI 门禁。
 
-- [ ] **Step 1: 解除 import 守卫**
+- [x] **Step 1: 解除 import 守卫**
 
 `process/mod.rs` 第 18 行附近：
 
@@ -107,18 +107,18 @@ use {
 };
 ```
 
-- [ ] **Step 2: 解除 PtySession 守卫**
+- [x] **Step 2: 解除 PtySession 守卫**
 
 第 35 行 `#[cfg(target_os = "macos")]` 上方的 `struct PtySession { ... }`，把其 `#[cfg(target_os = "macos")]` 改为 `#[cfg(unix)]`。结构体字段不变。
 
-- [ ] **Step 3: 把所有 PTY 方法的 macOS 守卫改为 unix**
+- [x] **Step 3: 把所有 PTY 方法的 macOS 守卫改为 unix**
 
 对以下方法的 `#[cfg(target_os = "macos")]` 全部改为 `#[cfg(unix)]`（用编辑器逐个替换，或脚本）：
 `spawn_app`（保留 macOS-only：见 Step 4）、`spawn_cli`、`spawn_cli_with_size`、`send_input`、`resize_pty`、`read_output`、`peek_output`、`subscribe_output`、`get_store`、`kill_process`。
 
 > 注意：`spawn_app` / `spawn_app_with_window` / `find_pids_by_app_name` 等 macOS GUI 应用启动逻辑**保持 `cfg(target_os="macos")` 不变**（app 模式非 Linux 目标）。只改 PTY 相关方法。
 
-- [ ] **Step 4: 删除所有返回错误的非 macOS 桩**
+- [x] **Step 4: 删除所有返回错误的非 macOS 桩**
 
 删除所有 `#[cfg(not(target_os = "macos"))]` 的 PTY 桩函数（`spawn_app` 非 macOS 桩可保留或删除，删除更干净；`spawn_cli`/`spawn_cli_with_size`/`kill_process`/`send_input`/`resize_pty`/`read_output`/`peek_output`/`subscribe_output`/`get_store` 的非 macOS 桩**全部删除**）。
 
@@ -129,7 +129,7 @@ grep -n "cfg(not(target_os = \"macos\"))" crates/cli-box-core/src/process/mod.rs
 ```
 Expected: 仅剩 `spawn_app` 相关（若保留）或为空。
 
-- [ ] **Step 5: 验证本机编译 + 现有 PTY 测试不回归**
+- [x] **Step 5: 验证本机编译 + 现有 PTY 测试不回归**
 
 ```bash
 cargo build -p cli-box-core -p cli-box-cli -p cli-box-daemon 2>&1 | tail -5
@@ -138,7 +138,7 @@ cargo clippy -p cli-box-core --all-targets -- -D warnings 2>&1 | tail -5
 ```
 Expected: 全部通过（macOS 上行为不变；PTY 方法现在 `cfg(unix)` 仍覆盖 macOS）。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add crates/cli-box-core/src/process/mod.rs
@@ -171,7 +171,7 @@ the stubs. No macOS behavior change."
 > vt100 API 已核对（docs.rs 0.16.2）：`Parser::new(rows, cols, scrollback)`、`process(&[u8])`、`screen().cell(row, col) -> Option<&Cell>`、`Cell::{contents, fgcolor, bgcolor, inverse}`、`Color::{Default, Idx(u8), Rgb(u8,u8,u8)}`、`screen().set_scroll(usize)`、`screen().size() -> (usize, usize)`。
 > ab_glyph：`FontRef::try_from_slice`、`glyph_id`、`outline_glyph`、`OutlinedGlyph::px_bounds` + `draw(|x,y,coverage|)`。实现时若 `draw` 坐标原点语义与本计划假设不符，以 docs.rs 为准调整 offset——属同一逻辑，非占位。
 
-- [ ] **Step 1: 写失败测试 — feed 后网格内容/颜色**
+- [x] **Step 1: 写失败测试 — feed 后网格内容/颜色**
 
 在 `crates/cli-box-core/src/capture/headless.rs` 顶部先写测试模块（TDD）：
 
@@ -252,14 +252,14 @@ mod tests {
 
 注意：测试引用了 `term.screen_cell(row, col)`（测试辅助），在 Step 3 实现里提供。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cargo test -p cli-box-core capture::headless 2>&1 | tail -15
 ```
 Expected: 编译失败（`HeadlessTerminal` 未定义）。
 
-- [ ] **Step 3: 实现 HeadlessTerminal 基础（new/feed/screen_cell/rendered_text）**
+- [x] **Step 3: 实现 HeadlessTerminal 基础（new/feed/screen_cell/rendered_text）**
 
 在 `headless.rs`（测试模块之后）实现：
 
@@ -345,14 +345,14 @@ impl HeadlessTerminal {
 }
 ```
 
-- [ ] **Step 4: 运行测试确认前 3 个通过**
+- [x] **Step 4: 运行测试确认前 3 个通过**
 
 ```bash
 cargo test -p cli-box-core capture::headless 2>&1 | tail -15
 ```
 Expected: 3 个测试 PASS。
 
-- [ ] **Step 5: 写失败测试 — render_png 产出有效 PNG**
+- [x] **Step 5: 写失败测试 — render_png 产出有效 PNG**
 
 在 `tests` 模块追加：
 
@@ -383,14 +383,14 @@ Expected: 3 个测试 PASS。
     }
 ```
 
-- [ ] **Step 6: 运行确认失败**
+- [x] **Step 6: 运行确认失败**
 
 ```bash
 cargo test -p cli-box-core capture::headless::tests::render_png 2>&1 | tail -15
 ```
 Expected: 编译失败（`render_png` 未定义）。
 
-- [ ] **Step 7: 实现 render_png**
+- [x] **Step 7: 实现 render_png**
 
 在 `impl HeadlessTerminal` 追加：
 
@@ -488,7 +488,7 @@ Expected: 编译失败（`render_png` 未定义）。
 
 > 实现者注意：`OutlinedGlyph::draw(|x, y, coverage|)` 的 `(x, y)` 在 ab_glyph 中是相对 `px_bounds().min` 的像素偏移；上面用 `min_x/min_y` 偏移到绝对坐标。若所用 ab_glyph 版本的 `draw` 已返回绝对坐标，去掉偏移即可。以 `cargo test render_png` 通过为准。
 
-- [ ] **Step 8: 运行全部 headless 测试**
+- [x] **Step 8: 运行全部 headless 测试**
 
 ```bash
 cargo test -p cli-box-core capture::headless 2>&1 | tail -15
@@ -496,7 +496,7 @@ cargo clippy -p cli-box-core --all-targets -- -D warnings 2>&1 | tail -5
 ```
 Expected: 5 个测试全 PASS；clippy 无 warning。
 
-- [ ] **Step 9: 导出模块**
+- [x] **Step 9: 导出模块**
 
 在 `crates/cli-box-core/src/capture/mod.rs` 末尾追加：
 
@@ -505,7 +505,7 @@ pub mod headless;
 pub use headless::HeadlessTerminal;
 ```
 
-- [ ] **Step 10: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add crates/cli-box-core/src/capture/headless.rs crates/cli-box-core/src/capture/mod.rs
@@ -527,7 +527,7 @@ CJK-capable via embedded monospace font. Fully unit-tested."
 - Produces: `ProcessManager::get_terminal(pid: u32) -> Result<Arc<HeadlessTerminal>>`（新增），供 Task 5 的 daemon 路由使用。
 - Consumes: `crate::capture::HeadlessTerminal`（Task 3）。
 
-- [ ] **Step 1: PtySession 增加 terminal 字段**
+- [x] **Step 1: PtySession 增加 terminal 字段**
 
 在 `PtySession` 结构体（现 `cfg(unix)`）追加字段：
 
@@ -547,7 +547,7 @@ struct PtySession {
 }
 ```
 
-- [ ] **Step 2: 创建 terminal 并在 reader 线程 feed**
+- [x] **Step 2: 创建 terminal 并在 reader 线程 feed**
 
 在 `spawn_cli_with_size` 中，创建 store 后、创建 reader 线程前，加：
 
@@ -567,7 +567,7 @@ struct PtySession {
 
 并在 `sessions.insert(tracked_id, PtySession { ... })` 的字段列表中加入 `terminal,`。
 
-- [ ] **Step 3: 实现 get_terminal 访问器**
+- [x] **Step 3: 实现 get_terminal 访问器**
 
 在 `impl ProcessManager` 中（与 `get_store` 相邻），加（`cfg(unix)`）：
 
@@ -585,7 +585,7 @@ struct PtySession {
     }
 ```
 
-- [ ] **Step 4: 编译 + 现有 PTY 测试不回归**
+- [x] **Step 4: 编译 + 现有 PTY 测试不回归**
 
 ```bash
 cargo build -p cli-box-core 2>&1 | tail -5
@@ -594,7 +594,7 @@ cargo clippy -p cli-box-core --all-targets -- -D warnings 2>&1 | tail -5
 ```
 Expected: 全部通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/cli-box-core/src/process/mod.rs
@@ -620,7 +620,7 @@ get_terminal(pid) accessor for the headless screenshot path."
 
 > 设计选择：headless 走显式 `--headless` 标志而非"renderer 未连接即 headless"，确保 macOS（有 Electron）行为 100% 不变；仅 Linux/无 Electron 时 CLI 传 `--headless`。
 
-- [ ] **Step 1: DaemonState 增加 headless 字段**
+- [x] **Step 1: DaemonState 增加 headless 字段**
 
 `daemon/mod.rs` 结构体 `DaemonState` 末尾（`terminal_ready_sandboxes` 之后）加：
 
@@ -644,7 +644,7 @@ grep -rn "terminal_ready_sandboxes: HashSet::new()\|terminal_ready_sandboxes: " 
 ```
 逐一在这些构造后补 `headless: false,`（run_daemon 用参数变量）。
 
-- [ ] **Step 2: run_daemon 接收 headless 参数**
+- [x] **Step 2: run_daemon 接收 headless 参数**
 
 ```rust
 pub async fn run_daemon(port: u16, headless: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -663,7 +663,7 @@ pub async fn run_daemon(port: u16, headless: bool) -> Result<(), Box<dyn std::er
     // ... rest unchanged ...
 ```
 
-- [ ] **Step 3: daemon main 解析 --headless**
+- [x] **Step 3: daemon main 解析 --headless**
 
 `crates/cli-box-daemon/src/main.rs`，在 `--version`/`--help` 判断之后、`find_available_port` 之前加：
 
@@ -680,7 +680,7 @@ pub async fn run_daemon(port: u16, headless: bool) -> Result<(), Box<dyn std::er
 
 并在 `--help` 文本追加：`eprintln!("      --headless      Run without Electron (headless, Linux)");`
 
-- [ ] **Step 4: 新增 screenshot_headless 函数**
+- [x] **Step 4: 新增 screenshot_headless 函数**
 
 在 `screenshot_with_frame` 函数之后加：
 
@@ -714,7 +714,7 @@ async fn screenshot_headless(
 }
 ```
 
-- [ ] **Step 5: 新增 scrollback_headless 函数**
+- [x] **Step 5: 新增 scrollback_headless 函数**
 
 在 `request_renderer_scrollback` 之后加：
 
@@ -756,7 +756,7 @@ async fn scrollback_headless(
 }
 ```
 
-- [ ] **Step 6: screenshot_handler 路由 headless**
+- [x] **Step 6: screenshot_handler 路由 headless**
 
 在 `screenshot_handler` 中，`if q.with_frame { ... }` 之后、`let offset = ...` 之后，在 `match request_renderer_screenshot(...)` **之前**插入 headless 短路：
 
@@ -773,7 +773,7 @@ async fn scrollback_headless(
         // ... unchanged ...
 ```
 
-- [ ] **Step 7: scrollback_handler 路由 headless**
+- [x] **Step 7: scrollback_handler 路由 headless**
 
 在 `scrollback_handler` 中，`match request_renderer_scrollback(...)` **之前**插入：
 
@@ -791,7 +791,7 @@ async fn scrollback_headless(
         // ... unchanged ...
 ```
 
-- [ ] **Step 8: 写 IT 测试 — headless 截图返回 PNG**
+- [x] **Step 8: 写 IT 测试 — headless 截图返回 PNG**
 
 在 `crates/cli-box-core/tests/daemon_integration.rs` 末尾追加（`cfg(unix)`，spawn 真实 PTY）：
 
@@ -851,7 +851,7 @@ async fn headless_screenshot_renders_png() {
 }
 ```
 
-- [ ] **Step 9: 编译 + 测试**
+- [x] **Step 9: 编译 + 测试**
 
 ```bash
 cargo build -p cli-box-core -p cli-box-cli -p cli-box-daemon 2>&1 | tail -5
@@ -860,7 +860,7 @@ cargo clippy -p cli-box-core -p cli-box-daemon --all-targets -- -D warnings 2>&1
 ```
 Expected: headless_screenshot_renders_png PASS；其余测试不回归。
 
-- [ ] **Step 10: 提交**
+- [x] **Step 10: 提交**
 
 ```bash
 git add crates/cli-box-core/src/daemon/mod.rs crates/cli-box-daemon/src/main.rs crates/cli-box-core/tests/daemon_integration.rs
@@ -883,14 +883,14 @@ macOS (non-headless) behavior unchanged."
 - Consumes: `find_electron_binary()`（已有）、daemon `--headless`（Task 5）。
 - Produces: 无 Electron 时 CLI 不等待 renderer，并把 `--headless` 传给 daemon。
 
-- [ ] **Step 1: 定位 daemon 启动点**
+- [x] **Step 1: 定位 daemon 启动点**
 
 ```bash
 grep -n "find_daemon_binary\|Command::new.*daemon\|run_daemon\|spawn.*daemon" crates/cli-box-cli/src/main.rs
 ```
 找到 CLI 用 `find_daemon_binary()` 拿到路径后 `Command::new(daemon_bin)` 启动 daemon 的位置（通常在 `ensure_daemon` 或 `ensure_healthy_daemon` 类函数中）。
 
-- [ ] **Step 2: 启动 daemon 时按需追加 --headless**
+- [x] **Step 2: 启动 daemon 时按需追加 --headless**
 
 在该 `Command::new(&daemon_bin)` 处，根据是否有 Electron 决定是否追加 `--headless`：
 
@@ -905,7 +905,7 @@ cmd.spawn()  // 或当前等价调用
 
 > 用 `find_electron_binary().is_none()` 作为 headless 判据：macOS 有 Electron → 不传 → daemon 走 renderer（不变）；Linux/无 Electron → 传 `--headless` → daemon 走 headless 渲染。
 
-- [ ] **Step 3: ensure_healthy_electron 显式短路**
+- [x] **Step 3: ensure_healthy_electron 显式短路**
 
 在 `ensure_healthy_electron` 函数**最开头**加显式短路（避免 macOS 路径探测）：
 
@@ -922,7 +922,7 @@ async fn ensure_healthy_electron() {
     // ... existing body unchanged ...
 ```
 
-- [ ] **Step 4: 编译 + 类型检查**
+- [x] **Step 4: 编译 + 类型检查**
 
 ```bash
 cargo build -p cli-box-cli 2>&1 | tail -5
@@ -930,7 +930,7 @@ cargo clippy -p cli-box-cli --all-targets -- -D warnings 2>&1 | tail -5
 ```
 Expected: 通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add crates/cli-box-cli/src/main.rs
@@ -951,7 +951,7 @@ for a renderer and starts the daemon in --headless mode."
 
 > 此 Task 是 Linux 编译的**权威验证**——它会捕获 Task 2 未在本机（macOS）暴露的任何残留 `cfg` 问题。
 
-- [ ] **Step 1: 新增 Linux clippy 门禁**
+- [x] **Step 1: 新增 Linux clippy 门禁**
 
 在 `ci.yml` 末尾（`frontend-test` job 之后）追加：
 
@@ -995,14 +995,14 @@ for a renderer and starts the daemon in --headless mode."
 
 > 注：`rusqlite` 用 bundled 特性（已是 `features=["bundled"]`），无需系统 sqlite。`vt100`/`ab_glyph` 纯 Rust，无系统依赖。
 
-- [ ] **Step 2: 验证 YAML 语法**
+- [x] **Step 2: 验证 YAML 语法**
 
 ```bash
 python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml')); print('ci.yml OK')"
 ```
 Expected: `ci.yml OK`。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -1022,7 +1022,7 @@ cfg(unix) gating and the headless path on Linux."
 
 **Interfaces:** 无（端到端验证）。
 
-- [ ] **Step 1: 适配 E2E 脚本支持 Linux**
+- [x] **Step 1: 适配 E2E 脚本支持 Linux**
 
 `tests/e2e-compound-start-screenshot.sh` 顶部现有的 skip 守卫，把"Linux 跳过"改为"Linux 走 headless 子集"。在脚本开头加平台检测与命令选择：
 
@@ -1042,7 +1042,7 @@ fi
 
 > 若改动复杂，最小可用方案：保留原 macOS 脚本不动，**新增** `tests/e2e-linux-headless.sh` 只覆盖 `start bash` → `screenshot`（默认 + `--top`）→ `scrollback`，并在 Step 2 的 CI job 调用它。二选一即可，推荐后者更清晰。
 
-- [ ] **Step 2: 新增 ci.yml headless E2E job**
+- [x] **Step 2: 新增 ci.yml headless E2E job**
 
 在 `ci.yml` 追加：
 
@@ -1079,7 +1079,7 @@ fi
         run: bash tests/e2e-linux-headless.sh
 ```
 
-- [ ] **Step 3: 创建 headless E2E 脚本（若 Step 1 选了新脚本方案）**
+- [x] **Step 3: 创建 headless E2E 脚本（若 Step 1 选了新脚本方案）**
 
 ```bash
 cat > tests/e2e-linux-headless.sh << 'E2EOF'
@@ -1114,7 +1114,7 @@ E2EOF
 chmod +x tests/e2e-linux-headless.sh
 ```
 
-- [ ] **Step 4: YAML 校验 + 提交**
+- [x] **Step 4: YAML 校验 + 提交**
 
 ```bash
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('ci.yml OK')"
@@ -1136,7 +1136,7 @@ ubuntu-latest — the only end-to-end exercise of HeadlessTerminal."
 
 **Interfaces:** 无。
 
-- [ ] **Step 1: 新增 npm 平台包**
+- [x] **Step 1: 新增 npm 平台包**
 
 `mkdir -p packages/cli-box-linux-x64`，创建 `packages/cli-box-linux-x64/package.json`：
 
@@ -1156,7 +1156,7 @@ ubuntu-latest — the only end-to-end exercise of HeadlessTerminal."
 }
 ```
 
-- [ ] **Step 2: release.yml 新增 build-linux job**
+- [x] **Step 2: release.yml 新增 build-linux job**
 
 在 `release.yml` 的 `build-and-release` job 之后，追加一个 Linux job（与 macOS job 平级，各自上传到同一 Release）：
 
@@ -1216,7 +1216,7 @@ ubuntu-latest — the only end-to-end exercise of HeadlessTerminal."
           npm publish ./packages/cli-box-linux-x64 --access public
 ```
 
-- [ ] **Step 3: skill 包 optionalDependencies 加 linux**
+- [x] **Step 3: skill 包 optionalDependencies 加 linux**
 
 在 `packages/cli-box-skill/package.json` 的 `optionalDependencies`（若存在）中加入；若无该字段则新增：
 
@@ -1229,7 +1229,7 @@ ubuntu-latest — the only end-to-end exercise of HeadlessTerminal."
 
 > 实现者：核对 `packages/cli-box-skill/package.json` 现有结构，保持版本号与其他平台包一致；release.yml 的 "Package npm platform packages" 步骤里更新版本号的 node 脚本需把 `packages/cli-box-linux-x64/package.json` 加入文件列表（参考现有 darwin-arm64 处理）。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 git add packages/cli-box-linux-x64/ packages/cli-box-skill/package.json .github/workflows/release.yml
@@ -1244,14 +1244,14 @@ GitHub Release tarball."
 
 ## 全部完成后的收尾
 
-- [ ] **Step 1: 本地完整门禁（macOS 不回归）**
+- [x] **Step 1: 本地完整门禁（macOS 不回归）**
 
 ```bash
 sh test.sh
 ```
 Expected: macOS 全部门禁通过。
 
-- [ ] **Step 2: 推送 + 开 PR**
+- [x] **Step 2: 推送 + 开 PR**
 
 ```bash
 git push -u origin feat/linux-headless-support
@@ -1271,13 +1271,13 @@ cli-box 仅支持 macOS。需要以无头 daemon 形态运行在云端 Linux 服
 - [x] daemon_integration headless 截图 IT（真实 PTY）
 - [x] Linux cargo check/clippy/test 门禁
 - [x] Linux headless E2E（start→screenshot→scrollback）
-- [ ] macOS test.sh 不回归
+- [x] macOS test.sh 不回归
 PR
 )"
 ```
 Expected: PR 创建并保持 open（不合入）。
 
-- [ ] **Step 3: 关注 CI，按需修复**
+- [x] **Step 3: 关注 CI，按需修复**
 
 等待 PR 的 CI（含新增 Linux 门禁）全部通过；失败则按 `superpowers:systematic-debugging` 定位修复后重推。
 
