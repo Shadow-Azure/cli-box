@@ -138,7 +138,7 @@ impl HeadlessTerminal {
     /// `scroll_offset` is a line offset into the scrollback (large values clamp
     /// to the top). Returns an error if no font is available for rendering.
     pub fn render_png(&self, scroll_offset: usize) -> Result<Vec<u8>> {
-        use ab_glyph::{point, Font, PxScale};
+        use ab_glyph::{point, Font, PxScale, ScaleFont};
         use image::{ImageBuffer, Rgba, RgbaImage};
         use std::io::Cursor;
 
@@ -157,8 +157,16 @@ impl HeadlessTerminal {
         let cell_h = line_h.round() as u32;
         // Monospace cell width ≈ 0.6 * height (avoids glyph_advance unit ambiguity).
         let cell_w = (line_h * 0.6).round() as u32;
-        let upem = font.units_per_em().unwrap_or(1.0);
-        let ascent_px = font.ascent_unscaled() / upem * line_h;
+        // Baseline offset MUST match how the rasterizer interprets `scale`:
+        // ab_glyph's `PxScale.y` maps the font's full `height_unscaled`
+        // (ascent - descent) to pixels — NOT `units_per_em`. Dividing the
+        // ascent by upem (the old code) overestimates the offset for any font
+        // whose ascent-descent exceeds 1em (all CJK faces: Noto CJK, Arial
+        // Unicode, ...), pushing the baseline below the cell so the next row's
+        // background fill clips the lower half of every tall glyph.
+        // `as_scaled(scale).ascent()` divides by height_unscaled and so stays
+        // consistent with the outline rasterization above.
+        let ascent_px = font.as_scaled(scale).ascent();
 
         let mut parser = self
             .parser
@@ -314,6 +322,60 @@ mod tests {
         let img = image::load_from_memory(&png).expect("decode").to_rgba8();
         let has_ink = img.pixels().any(|p| p[0] > 50 || p[1] > 50 || p[2] > 50);
         assert!(has_ink, "rendered PNG should contain non-background pixels");
+    }
+
+    #[test]
+    fn render_png_tall_glyphs_span_cell_height() {
+        // Regression: render_png used `ascent_unscaled / units_per_em` as the
+        // baseline offset, but ab_glyph's `PxScale.y` maps the font's full
+        // `height_unscaled` (ascent - descent) — not units_per_em — to pixels.
+        // For CJK-capable fonts (Arial Unicode, Noto CJK) the height exceeds
+        // upem, so the offset was too large and pushed the baseline *below* the
+        // cell. Because rows are painted top-to-bottom, the next row's
+        // background fill then erased the lower half of every tall glyph —
+        // ASCII letters showed only their top, sitting at the bottom of the row.
+        // Fix: derive the baseline offset from the rasterizer-consistent
+        // `as_scaled(scale).ascent()`.
+        let term = HeadlessTerminal::new(8, 2);
+        term.feed(b"M");
+        let png = match term.render_png(0) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped (no font): {e}");
+                return;
+            }
+        };
+        let img = image::load_from_memory(&png).expect("decode").to_rgba8();
+        let (img_w, img_h) = (img.width(), img.height());
+        let cell_h = img_h / 2;
+
+        // Scan the first text row for foreground ink and record its vertical span.
+        let is_fg = |p: &image::Rgba<u8>| p[0] > 50 || p[1] > 50 || p[2] > 50;
+        let mut top: Option<u32> = None;
+        let mut bot: Option<u32> = None;
+        for y in 0..cell_h {
+            for x in 0..img_w {
+                if is_fg(img.get_pixel(x, y)) {
+                    top.get_or_insert(y);
+                    bot = Some(y);
+                }
+            }
+        }
+        let top = top.expect("no foreground ink in row 0");
+        let bot = bot.unwrap();
+
+        // With the bug the glyph's top landed past the cell midline (ink only in
+        // the bottom band). After the fix it must reach into the top of the cell.
+        assert!(
+            top < cell_h * 2 / 5,
+            "tall glyph top ink at y={top}, cell_h={cell_h}; glyph is shoved to the \
+             bottom of its cell (baseline-offset / clipping bug)",
+        );
+        // Sanity: the glyph still reaches the lower portion of the cell.
+        assert!(
+            bot >= cell_h / 2,
+            "tall glyph bottom ink at y={bot}, cell_h={cell_h}; glyph too short",
+        );
     }
 
     #[test]
