@@ -1638,6 +1638,12 @@ fn find_daemon_binary() -> anyhow::Result<PathBuf> {
 
 /// Locate the Electron app binary next to the current executable.
 fn find_electron_binary() -> Option<PathBuf> {
+    // Electron is a macOS .app bundle; it cannot run on other platforms.
+    // Returning None on non-macOS drives the headless path (no renderer)
+    // and skips the macOS-app auto-download.
+    if cfg!(not(target_os = "macos")) {
+        return None;
+    }
     let exe_path = std::env::current_exe().ok()?;
     let exe_dir = exe_path.parent()?;
 
@@ -1841,7 +1847,43 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
     let daemon_bin = find_daemon_binary()?;
     tracing::info!("[start] spawning daemon: {}", daemon_bin.display());
 
-    let _child = Command::new(&daemon_bin)
+    // Headless when no Electron app is available (Linux / no GUI).
+    let mut daemon_cmd = Command::new(&daemon_bin);
+    if find_electron_binary().is_none() {
+        daemon_cmd.arg("--headless");
+    }
+    // Detach the daemon's stdio: it must NOT inherit the CLI's pipes, otherwise
+    // it keeps the write-end open and hangs callers like `$(cli-box start | sed)`
+    // that wait for EOF. Redirect to ~/.cli-box/daemon.log (logs preserved),
+    // falling back to /dev/null if the log file cannot be opened.
+    daemon_cmd.stdin(std::process::Stdio::null());
+    let log_path = dirs::home_dir()
+        .map(|h| h.join(".cli-box").join("daemon.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/cli-box-daemon.log"));
+    let _ = std::fs::create_dir_all(log_path.parent().unwrap_or(std::path::Path::new("/tmp")));
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => {
+            let f2 = f.try_clone();
+            daemon_cmd.stdout(std::process::Stdio::from(f));
+            match f2 {
+                Ok(g) => {
+                    daemon_cmd.stderr(std::process::Stdio::from(g));
+                }
+                Err(_) => {
+                    daemon_cmd.stderr(std::process::Stdio::null());
+                }
+            }
+        }
+        Err(_) => {
+            daemon_cmd.stdout(std::process::Stdio::null());
+            daemon_cmd.stderr(std::process::Stdio::null());
+        }
+    }
+    let _child = daemon_cmd
         .spawn()
         .context("Failed to launch cli-box-daemon")?;
 
@@ -1876,6 +1918,14 @@ async fn ensure_healthy_daemon() -> anyhow::Result<u16> {
 /// If old Electron is dead → spawn new and wait for renderer_connected.
 async fn ensure_healthy_electron() {
     use std::io::Write;
+
+    // Headless: no Electron app present (Linux / cloud). Don't spawn or wait.
+    if find_electron_binary().is_none() {
+        eprintln!(
+            "Running in headless mode (no Electron). Screenshots use the server-side renderer."
+        );
+        return;
+    }
 
     // If existing Electron is alive, just wait for renderer_connected.
     // The IPC fix (removed cache) means old Electron auto-discovers new daemon.

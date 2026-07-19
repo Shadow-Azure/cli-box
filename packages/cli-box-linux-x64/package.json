@@ -1,0 +1,10 @@
+{
+  "name": "cli-box-linux-x64",
+  "version": "0.2.8",
+  "description": "cli-box binaries for Linux x86_64 (headless)",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": [
+    "bin/"
+  ]
+}

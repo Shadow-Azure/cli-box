@@ -607,10 +607,83 @@ jobs:
         run: node --test
 
   # ==================== 门禁结果汇总 ====================
+  rust-linux:
+    name: Rust 编译/测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLIBOX_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: 设置 Rust 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: "v2-linux"
+
+      - name: 安装字体（DejaVu Mono，供 headless 渲染测试）
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: cargo check (all crates)
+        run: cargo check -p cli-box-core -p cli-box-cli -p cli-box-daemon
+
+      - name: cargo clippy
+        run: cargo clippy -p cli-box-core -p cli-box-cli -p cli-box-daemon --all-targets -- -D warnings
+
+      - name: cargo test (core, incl. headless renderer)
+        run: cargo test -p cli-box-core
+
+  e2e-linux-headless:
+    name: Headless E2E (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLIBOX_FONT: /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: 设置 Rust 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: "v2-linux-e2e"
+
+      - name: 安装字体（DejaVu Mono，供 headless 渲染）
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: 构建 CLI + daemon (release)
+        run: cargo build --release -p cli-box-cli -p cli-box-daemon
+
+      - name: 置于 PATH
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$PWD/target/release/cli-box" "$HOME/.local/bin/cli-box"
+          ln -sf "$PWD/target/release/cli-box-daemon" "$HOME/.local/bin/cli-box-daemon"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 运行 headless E2E
+        run: bash tests/e2e-linux-headless.sh
+
   gate-result:
     name: 门禁结果
     runs-on: ubuntu-latest
-    needs: [rust-fmt, rust-clippy, rust-test, frontend-test, e2e-test, unified-test, security, publish-sim, skill-upgrade-flow, skill-unit-test]
+    needs: [rust-fmt, rust-clippy, rust-test, rust-linux, e2e-linux-headless, frontend-test, e2e-test, unified-test, security, publish-sim, skill-upgrade-flow, skill-unit-test]
     if: always()
 
     steps:
@@ -647,6 +720,8 @@ jobs:
           PUBLISH_SIM="${{ needs.publish-sim.result }}"
           UPGRADE_FLOW="${{ needs.skill-upgrade-flow.result }}"
           SKILL_UNIT="${{ needs.skill-unit-test.result }}"
+          RUST_LINUX="${{ needs.rust-linux.result }}"
+          E2E_LINUX_HEADLESS="${{ needs.e2e-linux-headless.result }}"
 
           echo "| 检查项 | 状态 |"
           echo "|-------|------|"
@@ -660,6 +735,8 @@ jobs:
           echo "| 发布模拟验证 | $PUBLISH_SIM |"
           echo "| 升级流程测试 | $UPGRADE_FLOW |"
           echo "| cli-box-skill 单元测试 | $SKILL_UNIT |"
+          echo "| Rust 编译/测试 | $RUST_LINUX |"
+          echo "| Headless E2E | $E2E_LINUX_HEADLESS |"
           echo ""
 
           if [ -f coverage-artifacts/rust-coverage-summary.md ]; then
@@ -677,6 +754,8 @@ jobs:
           if [[ "$RUST_FMT" == "success" && \
                 "$RUST_CLIPPY" == "success" && \
                 "$RUST_TEST" == "success" && \
+                "$RUST_LINUX" == "success" && \
+                "$E2E_LINUX_HEADLESS" == "success" && \
                 "$FRONTEND_TEST" == "success" && \
                 "$E2E_TEST" == "success" && \
                 "$UNIFIED_TEST" == "success" && \

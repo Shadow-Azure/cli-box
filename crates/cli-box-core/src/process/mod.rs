@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tracing::{debug, info, trace, warn};
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use {
     nix::sys::signal::{kill, Signal},
     nix::unistd::Pid,
@@ -34,7 +34,7 @@ pub struct ProcessInfo {
 /// A dedicated reader thread continuously reads PTY output into a shared
 /// SQLite-backed PtyStore. Output persists across WebSocket reconnections
 /// and supports late-subscriber replay.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 struct PtySession {
     writer: Box<dyn std::io::Write + Send>,
     master: Box<dyn MasterPty>,
@@ -43,6 +43,8 @@ struct PtySession {
     command: String,
     /// SQLite-backed persistent output store (replaces VecDeque buffer)
     store: Arc<PtyStore>,
+    /// Headless terminal grid, fed incrementally for server-side screenshots.
+    terminal: Arc<crate::capture::HeadlessTerminal>,
     /// Flag to signal the reader thread to stop
     stop_flag: Arc<AtomicBool>,
     /// Handle to the reader thread (for join on cleanup)
@@ -61,6 +63,7 @@ static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 /// Known Chromium-based app bundle identifiers.
 /// These apps enforce single-instance and need `open -g -n --args --user-data-dir`
 /// to create isolated processes that don't interfere with the user's existing browser.
+#[cfg(target_os = "macos")]
 const CHROMIUM_BUNDLE_IDS: &[&str] = &[
     "com.google.Chrome",
     "com.google.Chrome.beta",
@@ -79,6 +82,7 @@ const CHROMIUM_BUNDLE_IDS: &[&str] = &[
 ];
 
 /// Read `CFBundleIdentifier` from an app bundle's Info.plist.
+#[cfg(target_os = "macos")]
 fn read_bundle_id(app_path: &str) -> Option<String> {
     let plist_path = std::path::Path::new(app_path).join("Contents/Info.plist");
     let data = std::fs::read_to_string(plist_path).ok()?;
@@ -91,6 +95,7 @@ fn read_bundle_id(app_path: &str) -> Option<String> {
 }
 
 /// Check if an app is Chromium-based by its bundle identifier.
+#[cfg(target_os = "macos")]
 fn is_chromium_app(app_path: &str) -> bool {
     match read_bundle_id(app_path) {
         Some(id) => CHROMIUM_BUNDLE_IDS
@@ -356,14 +361,24 @@ impl ProcessManager {
         ))
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn spawn_app_with_window(
+        _app_path: &str,
+        _sandbox_id: Option<&str>,
+    ) -> Result<(ProcessInfo, Option<u32>)> {
+        Err(AppError::Process(
+            "spawn_app_with_window only supported on macOS".into(),
+        ))
+    }
+
     /// Launch a CLI process with PTY support (default 80x24)
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn spawn_cli(command: &str, args: &[String]) -> Result<ProcessInfo> {
         Self::spawn_cli_with_size(command, args, 80, 24)
     }
 
     /// Launch a CLI process with PTY support and custom terminal dimensions.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn spawn_cli_with_size(
         command: &str,
         args: &[String],
@@ -418,6 +433,9 @@ impl ProcessManager {
         // Create SQLite-backed persistent store and stop flag for the reader thread
         let store = PtyStore::new_in_memory(&tracked_id.to_string())?;
         let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        // Headless terminal grid fed by the reader thread (for screenshots).
+        let terminal = Arc::new(crate::capture::HeadlessTerminal::new(cols, rows));
+        let thread_terminal = Arc::clone(&terminal);
 
         // Create broadcast channel for streaming output to WebSocket subscribers
         let (output_tx, _) = broadcast::channel::<String>(256);
@@ -453,6 +471,8 @@ impl ProcessManager {
                             if let Err(e) = thread_store.append(&text) {
                                 warn!("PTY reader {tracked_id}: store append failed: {e}");
                             }
+                            // Feed raw bytes to the headless terminal grid (for screenshots).
+                            thread_terminal.feed(&read_buf[..n]);
                             // Real-time broadcast to current subscribers
                             let receiver_count = thread_tx.receiver_count();
                             let _ = thread_tx.send(text);
@@ -486,6 +506,7 @@ impl ProcessManager {
                 child_pid: child_pid.unwrap_or(0),
                 command: command.to_string(),
                 store,
+                terminal,
                 stop_flag,
                 reader_thread: Some(reader_thread),
                 output_tx,
@@ -504,23 +525,6 @@ impl ProcessManager {
             path: None,
             is_running: true,
         })
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn spawn_cli(command: &str, args: &[String]) -> Result<ProcessInfo> {
-        Self::spawn_cli_with_size(command, args, 80, 24)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn spawn_cli_with_size(
-        _command: &str,
-        _args: &[String],
-        _cols: u16,
-        _rows: u16,
-    ) -> Result<ProcessInfo> {
-        Err(AppError::Process(
-            "spawn_cli_with_size only supported on macOS".into(),
-        ))
     }
 
     /// List all running processes in the sandbox
@@ -550,7 +554,7 @@ impl ProcessManager {
     }
 
     /// Kill a process by tracked PID
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn kill_process(pid: u32) -> Result<()> {
         // Step 1: Remove session from SESSIONS (brief lock)
         let mut session = {
@@ -596,16 +600,8 @@ impl ProcessManager {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn kill_process(pid: u32) -> Result<()> {
-        let _ = pid;
-        Err(AppError::Process(
-            "kill_process only supported on macOS".into(),
-        ))
-    }
-
     /// Send input to a PTY process
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn send_input(pid: u32, data: &[u8]) -> Result<()> {
         info!(
             "[pty] send_input: pid={}, len={}, preview={:?}",
@@ -641,15 +637,8 @@ impl ProcessManager {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn send_input(_pid: u32, _data: &[u8]) -> Result<()> {
-        Err(AppError::Process(
-            "send_input only supported on macOS".into(),
-        ))
-    }
-
     /// Resize a PTY session's terminal dimensions
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn resize_pty(pid: u32, cols: u16, rows: u16) -> Result<()> {
         let sessions = SESSIONS
             .lock()
@@ -670,18 +659,11 @@ impl ProcessManager {
         Ok(())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn resize_pty(_pid: u32, _cols: u16, _rows: u16) -> Result<()> {
-        Err(AppError::Process(
-            "resize_pty only supported on macOS".into(),
-        ))
-    }
-
     /// Read output from a PTY process.
     ///
     /// Reads all available data from the SQLite-backed PtyStore.
     /// Non-blocking: returns `Ok(None)` when the store is empty.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn read_output(pid: u32) -> Result<Option<String>> {
         let store = {
             let sessions = SESSIONS
@@ -727,23 +709,9 @@ impl ProcessManager {
         Ok(Some(text))
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn read_output(_pid: u32) -> Result<Option<String>> {
-        Err(AppError::Process(
-            "read_output only supported on macOS".into(),
-        ))
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn peek_output(_pid: u32) -> Result<Option<String>> {
-        Err(AppError::Process(
-            "peek_output only supported on macOS".into(),
-        ))
-    }
-
     /// Subscribe to PTY output stream for WebSocket streaming.
     /// Returns a broadcast::Receiver that receives output chunks in real-time.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn subscribe_output(pid: u32) -> Result<broadcast::Receiver<String>> {
         let sessions = SESSIONS
             .lock()
@@ -754,15 +722,8 @@ impl ProcessManager {
         Ok(session.output_tx.subscribe())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn subscribe_output(_pid: u32) -> Result<broadcast::Receiver<String>> {
-        Err(AppError::Process(
-            "subscribe_output only supported on macOS".into(),
-        ))
-    }
-
     /// Get the PtyStore for a session (for WebSocket replay).
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn get_store(pid: u32) -> Result<Arc<PtyStore>> {
         let sessions = SESSIONS
             .lock()
@@ -773,11 +734,16 @@ impl ProcessManager {
         Ok(Arc::clone(&session.store))
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn get_store(_pid: u32) -> Result<Arc<PtyStore>> {
-        Err(AppError::Process(
-            "get_store only supported on macOS".into(),
-        ))
+    /// Get the HeadlessTerminal for a session (for headless screenshots).
+    #[cfg(unix)]
+    pub fn get_terminal(pid: u32) -> Result<Arc<crate::capture::HeadlessTerminal>> {
+        let sessions = SESSIONS
+            .lock()
+            .map_err(|e| AppError::Process(e.to_string()))?;
+        let session = sessions
+            .get(&pid)
+            .ok_or_else(|| AppError::Process(format!("Process {pid} not found")))?;
+        Ok(Arc::clone(&session.terminal))
     }
 }
 

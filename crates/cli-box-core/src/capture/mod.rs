@@ -435,3 +435,6 @@ mod non_macos_impl {
         }
     }
 }
+
+pub mod headless;
+pub use headless::HeadlessTerminal;

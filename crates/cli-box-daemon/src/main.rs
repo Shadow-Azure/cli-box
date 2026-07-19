@@ -15,10 +15,13 @@ fn main() {
         eprintln!("This binary is normally launched by `cli-box`. Flags:");
         eprintln!("  -V, --version    Print version and exit");
         eprintln!("  -h, --help       Print this help and exit");
+        eprintln!("      --headless    Run without Electron (headless / Linux)");
         return;
     }
 
     tracing_subscriber::fmt::init();
+
+    let headless = args.iter().any(|a| a == "--headless");
 
     let port = cli_box_core::daemon::find_available_port(15801, 15899)
         .expect("No available port in range 15801-15899");
@@ -26,6 +29,6 @@ fn main() {
     tracing::info!("Sandbox daemon started on port {port}");
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(async move { cli_box_core::daemon::run_daemon(port).await })
+    rt.block_on(async move { cli_box_core::daemon::run_daemon(port, headless).await })
         .expect("Daemon exited with error");
 }
