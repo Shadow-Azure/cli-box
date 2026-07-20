@@ -343,8 +343,21 @@ async fn readyz_handler(
     let s = state.lock().await;
     let renderer_connected = s.screenshot_ws_tx.is_some();
     let terminal_ready = match params.get("sandbox_id") {
-        Some(sandbox_id) => s.terminal_ready_sandboxes.contains(sandbox_id.as_str()),
         None => true,
+        Some(sandbox_id) => {
+            if s.headless {
+                // No renderer in headless mode; the terminal is ready as
+                // soon as the sandbox's PTY exists (spawned synchronously at
+                // creation). The CLI only polls for CLI sandboxes, which
+                // always carry a pty_pid, so this mirrors its own gate.
+                s.sandboxes
+                    .get(sandbox_id.as_str())
+                    .map(|sb| sb.pty_pid.is_some())
+                    .unwrap_or(false)
+            } else {
+                s.terminal_ready_sandboxes.contains(sandbox_id.as_str())
+            }
+        }
     };
     Json(DaemonReadinessResponse {
         status: if renderer_connected && terminal_ready {
