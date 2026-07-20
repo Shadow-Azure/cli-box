@@ -1658,13 +1658,13 @@ fn find_electron_binary() -> Option<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let dev_bundle = cwd.join("dist/electron/mac-arm64/CLI Box.app");
     if dev_bundle.exists() {
-        return Some(dev_bundle.join("Contents/MacOS/cli-box"));
+        return Some(dev_bundle.join("Contents/MacOS/CLI Box"));
     }
 
     // Also check x64
     let dev_bundle_x64 = cwd.join("dist/electron/mac/CLI Box.app");
     if dev_bundle_x64.exists() {
-        return Some(dev_bundle_x64.join("Contents/MacOS/cli-box"));
+        return Some(dev_bundle_x64.join("Contents/MacOS/CLI Box"));
     }
 
     // Auto-download fallback: check ~/.cli-box/bin/CLI Box.app
