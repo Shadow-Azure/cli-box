@@ -63,6 +63,37 @@ fn router_with_sandbox() -> axum::Router {
     build_daemon_router(state_with_sandbox())
 }
 
+/// Headless daemon state with one CLI sandbox carrying `pty_pid`.
+/// Not unix-gated: readyz only inspects state, it does not spawn a PTY.
+fn headless_ready_state(id: &str, pty_pid: u32) -> Arc<Mutex<DaemonState>> {
+    let mut sandboxes = HashMap::new();
+    sandboxes.insert(
+        id.to_string(),
+        ManagedSandbox {
+            id: id.to_string(),
+            kind: InstanceKind::Cli {
+                command: "zsh".to_string(),
+                args: vec![],
+            },
+            status: InstanceStatus::Running,
+            port: 0,
+            pty_pid: Some(pty_pid),
+            window_id: None,
+        },
+    );
+    Arc::new(Mutex::new(DaemonState {
+        port: 0,
+        sandboxes,
+        started_at: std::time::Instant::now(),
+        screenshot_ws_tx: None,
+        pending_screenshots: HashMap::new(),
+        pending_scrollback: HashMap::new(),
+        screenshot_request_counter: 0,
+        terminal_ready_sandboxes: HashSet::new(),
+        headless: true,
+    }))
+}
+
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let resp = router()
@@ -221,6 +252,77 @@ async fn readyz_returns_not_ready_without_renderer() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "not_ready");
     assert_eq!(json["renderer_connected"], false);
+}
+
+#[tokio::test]
+async fn readyz_terminal_ready_in_headless_mode() {
+    // Headless mode has no renderer, so terminal_ready must be derived from
+    // the sandbox's PTY existence rather than the renderer-reported set.
+    let resp = build_daemon_router(headless_ready_state("sb-1", 4242))
+        .oneshot(
+            Request::builder()
+                .uri("/readyz?sandbox_id=sb-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["terminal_ready"], true);
+
+    // Unknown sandbox id -> not ready.
+    let resp = build_daemon_router(headless_ready_state("sb-1", 4242))
+        .oneshot(
+            Request::builder()
+                .uri("/readyz?sandbox_id=unknown")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["terminal_ready"], false);
+}
+
+#[tokio::test]
+async fn readyz_terminal_ready_uses_renderer_set_when_not_headless() {
+    // Non-headless: readiness must still come from terminal_ready_sandboxes,
+    // unaffected by the headless branch.
+    let state = state_with_sandbox();
+    let resp = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/readyz?sandbox_id=test-sb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["terminal_ready"], false);
+
+    // Once the renderer reports ready, it flips to true.
+    {
+        let mut s = state.lock().await;
+        s.terminal_ready_sandboxes.insert("test-sb".to_string());
+    }
+    let resp = build_daemon_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/readyz?sandbox_id=test-sb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["terminal_ready"], true);
 }
 
 #[tokio::test]
